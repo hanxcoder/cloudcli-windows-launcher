@@ -4,7 +4,7 @@ ManifestDPIAwareness PerMonitorV2
 !include "MUI2.nsh"
 
 Name "CloudCLI"
-OutFile "CloudCLI-Setup-1.1.0.exe"
+OutFile "CloudCLI-Setup-1.2.0.exe"
 InstallDir "$LOCALAPPDATA\Programs\CloudCLI"
 InstallDirRegKey HKCU "Software\CloudCLI" "InstallDir"
 RequestExecutionLevel user
@@ -12,11 +12,11 @@ SetCompressor /SOLID lzma
 Icon "icon.ico"
 UninstallIcon "icon.ico"
 
-VIProductVersion "1.1.0.0"
+VIProductVersion "1.2.0.0"
 VIAddVersionKey "ProductName" "CloudCLI"
 VIAddVersionKey "FileDescription" "CloudCLI desktop window (WebView2)"
-VIAddVersionKey "FileVersion" "1.1.0.0"
-VIAddVersionKey "ProductVersion" "1.1.0.0"
+VIAddVersionKey "FileVersion" "1.2.0.0"
+VIAddVersionKey "ProductVersion" "1.2.0.0"
 VIAddVersionKey "LegalCopyright" "local"
 
 !define MUI_ABORTWARNING
@@ -48,6 +48,9 @@ Section "CloudCLI" SecMain
   File "Microsoft.Web.WebView2.Core.dll"
   File "Microsoft.Web.WebView2.WinForms.dll"
   File "WebView2Loader.dll"
+  File "LICENSE"
+  File "WebView2-LICENSE.txt"
+  File "WebView2-NOTICE.txt"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateShortcut "$DESKTOP\CloudCLI.lnk" "$INSTDIR\CloudCLI.exe" "" "$INSTDIR\icon.ico" 0
@@ -59,7 +62,7 @@ Section "CloudCLI" SecMain
   WriteRegStr HKCU "Software\CloudCLI" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayName" "CloudCLI"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayIcon" "$INSTDIR\icon.ico"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.1.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.2.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "Publisher" "local"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "UninstallString" "$INSTDIR\Uninstall.exe"
 
@@ -77,6 +80,9 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\CloudCLI"
   RMDir /r "$INSTDIR\logs"
   RMDir /r "$INSTDIR\data"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\WebView2-LICENSE.txt"
+  Delete "$INSTDIR\WebView2-NOTICE.txt"
   Delete "$INSTDIR\CloudCLI.exe"
   Delete "$INSTDIR\icon.ico"
   Delete "$INSTDIR\Microsoft.Web.WebView2.Core.dll"

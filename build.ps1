@@ -1,4 +1,4 @@
-# Build CloudCLI 1.1.0 (WebView2 shell) -> dist\CloudCLI.exe + dist\CloudCLI-Setup-1.1.0.exe
+# Build CloudCLI 1.2.0 (WebView2 shell) -> dist\CloudCLI.exe + dist\CloudCLI-Setup-1.2.0.exe
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $src  = Join-Path $root 'src'
@@ -12,7 +12,7 @@ New-Item -ItemType Directory $dist -Force | Out-Null
 Write-Host '[2/3] compiling CloudCLI.exe'
 $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path $csc)) { throw "csc.exe not found: $csc" }
-& $csc /nologo /target:winexe `
+& $csc /nologo /target:winexe /platform:x64 `
     /out:"$dist\CloudCLI.exe" `
     /win32icon:"$src\icon.ico" `
     /win32manifest:"$src\app.manifest" `
@@ -22,6 +22,8 @@ if (-not (Test-Path $csc)) { throw "csc.exe not found: $csc" }
     "$src\Program.cs"
 if ($LASTEXITCODE -ne 0) { throw "csc failed: $LASTEXITCODE" }
 Copy-Item "$lib\*.dll" $dist -Force
+
+Copy-Item "$root\LICENSE", "$root\WebView2-LICENSE.txt", "$root\WebView2-NOTICE.txt" $dist -Force
 
 Write-Host '[3/3] building installer'
 $makensis = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'electron-builder\Cache') -Recurse -Filter makensis.exe -ErrorAction SilentlyContinue |
