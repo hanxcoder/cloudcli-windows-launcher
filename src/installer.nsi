@@ -1,8 +1,10 @@
 ﻿Unicode true
+ManifestDPIAware true
+ManifestDPIAwareness PerMonitorV2
 !include "MUI2.nsh"
 
 Name "CloudCLI"
-OutFile "CloudCLI-Setup-1.0.0.exe"
+OutFile "CloudCLI-Setup-1.1.0.exe"
 InstallDir "$LOCALAPPDATA\Programs\CloudCLI"
 InstallDirRegKey HKCU "Software\CloudCLI" "InstallDir"
 RequestExecutionLevel user
@@ -10,11 +12,11 @@ SetCompressor /SOLID lzma
 Icon "icon.ico"
 UninstallIcon "icon.ico"
 
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.1.0.0"
 VIAddVersionKey "ProductName" "CloudCLI"
 VIAddVersionKey "FileDescription" "CloudCLI desktop window (WebView2)"
-VIAddVersionKey "FileVersion" "1.0.0.0"
-VIAddVersionKey "ProductVersion" "1.0.0.0"
+VIAddVersionKey "FileVersion" "1.1.0.0"
+VIAddVersionKey "ProductVersion" "1.1.0.0"
 VIAddVersionKey "LegalCopyright" "local"
 
 !define MUI_ABORTWARNING
@@ -56,7 +58,7 @@ Section "CloudCLI" SecMain
   WriteRegStr HKCU "Software\CloudCLI" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayName" "CloudCLI"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayIcon" "$INSTDIR\icon.ico"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.0.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.1.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "Publisher" "local"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "UninstallString" "$INSTDIR\Uninstall.exe"
 

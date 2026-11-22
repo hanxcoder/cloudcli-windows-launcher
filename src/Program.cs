@@ -220,7 +220,7 @@ namespace CloudCLI
                 await web.EnsureCoreWebView2Async(null);
                 web.CoreWebView2.Settings.AreDevToolsEnabled = true;
                 web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+                web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
                 web.CoreWebView2.NewWindowRequested += delegate (object s, CoreWebView2NewWindowRequestedEventArgs e)
                 {
                     e.Handled = true;

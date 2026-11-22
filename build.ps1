@@ -1,4 +1,4 @@
-# Build CloudCLI 1.0.0 (WebView2 shell) -> dist\CloudCLI.exe + dist\CloudCLI-Setup-1.0.0.exe
+# Build CloudCLI 1.1.0 (WebView2 shell) -> dist\CloudCLI.exe + dist\CloudCLI-Setup-1.1.0.exe
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $src  = Join-Path $root 'src'
