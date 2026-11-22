@@ -53,7 +53,8 @@ Section "CloudCLI" SecMain
   CreateShortcut "$DESKTOP\CloudCLI.lnk" "$INSTDIR\CloudCLI.exe" "" "$INSTDIR\icon.ico" 0
   CreateDirectory "$SMPROGRAMS\CloudCLI"
   CreateShortcut "$SMPROGRAMS\CloudCLI\CloudCLI.lnk" "$INSTDIR\CloudCLI.exe" "" "$INSTDIR\icon.ico" 0
-  CreateShortcut "$SMPROGRAMS\CloudCLI\${UNINST_LNK}.lnk" "$INSTDIR\Uninstall.exe"
+  Delete "$SMPROGRAMS\CloudCLI\$${UNINST_LNK}.lnk"
+  CreateShortcut "$SMPROGRAMS\CloudCLI\$(UNINST_LNK).lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKCU "Software\CloudCLI" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayName" "CloudCLI"
