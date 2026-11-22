@@ -40,3 +40,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 The script recreates `dist\`, compiles the launcher with the 64-bit .NET Framework 4.x C# compiler, and copies the WebView2 DLLs from `lib\`. If it finds NSIS's `makensis.exe` under `%LOCALAPPDATA%\electron-builder\Cache`, it also builds `CloudCLI-Setup-1.1.0.exe`.
+
+## License
+
+The Windows launcher is licensed under [GPL-3.0-only](LICENSE). [Upstream CloudCLI](https://github.com/siteboon/claudecodeui/blob/main/LICENSE) is licensed under AGPLv3. The bundled Microsoft WebView2 SDK DLLs are subject to Microsoft’s license terms.

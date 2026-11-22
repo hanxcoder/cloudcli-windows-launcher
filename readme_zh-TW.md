@@ -40,3 +40,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
 指令碼會重建 `dist\`，使用 .NET Framework 4.x 的 64 位元 C# 編譯器建置啟動器，再複製 `lib\` 中的 WebView2 DLL。若在 `%LOCALAPPDATA%\electron-builder\Cache` 找到 NSIS 的 `makensis.exe`，也會產生 `CloudCLI-Setup-1.1.0.exe`。
+
+## 授權條款
+
+本專案的 Windows 啟動器採用 [GPL-3.0-only](LICENSE)。[上游 CloudCLI](https://github.com/siteboon/claudecodeui/blob/main/LICENSE) 採用 AGPLv3。隨附的 Microsoft WebView2 SDK DLL 適用微軟的授權條款。
