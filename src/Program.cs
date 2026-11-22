@@ -103,7 +103,7 @@ namespace CloudCLI
             status.BackColor = Color.FromArgb(13, 13, 15);
             status.TextAlign = ContentAlignment.MiddleCenter;
             status.Dock = DockStyle.Fill;
-            status.Font = new Font("Segoe UI", 12F);
+            status.Font = new Font(Lang == 1 ? "Microsoft YaHei UI" : "Segoe UI", 12F);
             Controls.Add(status);
 
             KeyPreview = true;
