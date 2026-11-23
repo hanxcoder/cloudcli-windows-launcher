@@ -18,7 +18,7 @@ Open the upstream CloudCLI web interface in a Windows desktop window. This WinFo
    ```
 
    Open `http://localhost:3001/` in a Windows browser to check that the CloudCLI page loads. Press `Ctrl+C` in the WSL terminal to stop the test instance before trying automatic startup.
-3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-1.2.0.exe](https://github.com/hanxcoder/cloudcli-windows-launcher/releases/download/v1.2.0/CloudCLI-Setup-1.2.0.exe).
+3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-1.2.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v1.2.0/CloudCLI-Setup-1.2.0.exe).
 4. Open CloudCLI from the Start menu or desktop shortcut if you used the installer. Check that the CloudCLI web interface loads in the desktop window.
 
 Press `F5` to reload or `Ctrl+I` to open developer tools. Links requesting a new window open through Windows. The launcher follows the Windows display language. Set `CLOUDCLI_LANG` to `en`, `zh-CN`, or `zh-TW` to override it.
