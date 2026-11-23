@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 · 2026-11-24
+
+- Choose automatic setup or connect to an existing deployment from the main window on first launch. Custom setup supports a local port and an option to connect only. Successful settings carry over to the next launch.
+- Automatic setup reuses CloudCLI when available. If installation is needed, npm installs it under the launcher's data directory.
+- The launcher starts CloudCLI through WSL directly and checks the Node.js version. It also looks for compatible installations managed by tools such as nvm.
+- Startup logs distinguish a missing executable on PATH from a failed probe and record timings. Service output is available in `logs/server.log` under the installation directory.
+- Updated English, Simplified Chinese and Traditional Chinese setup messages.
+
 ## 1.3.0 · 2026-11-23
 
 - Closing the desktop window keeps CloudCLI available to browser sessions. Use the tray menu to reopen the window or exit. Exiting stops a service started by the launcher and leaves independently started services running.

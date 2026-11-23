@@ -5,7 +5,7 @@ ManifestDPIAwareness PerMonitorV2
 !include "FileFunc.nsh"
 
 Name "CloudCLI"
-OutFile "CloudCLI-Setup-1.3.0.exe"
+OutFile "CloudCLI-Setup-1.4.0.exe"
 InstallDir "$LOCALAPPDATA\Programs\CloudCLI"
 InstallDirRegKey HKCU "Software\CloudCLI" "InstallDir"
 RequestExecutionLevel user
@@ -13,11 +13,11 @@ SetCompressor /SOLID lzma
 Icon "icon.ico"
 UninstallIcon "icon.ico"
 
-VIProductVersion "1.3.0.0"
+VIProductVersion "1.4.0.0"
 VIAddVersionKey "ProductName" "CloudCLI"
 VIAddVersionKey "FileDescription" "CloudCLI desktop window (WebView2)"
-VIAddVersionKey "FileVersion" "1.3.0.0"
-VIAddVersionKey "ProductVersion" "1.3.0.0"
+VIAddVersionKey "FileVersion" "1.4.0.0"
+VIAddVersionKey "ProductVersion" "1.4.0.0"
 VIAddVersionKey "LegalCopyright" "local"
 
 !define MUI_ABORTWARNING
@@ -63,6 +63,7 @@ FunctionEnd
 
 Section "CloudCLI" SecMain
   SetOutPath "$INSTDIR"
+  File "launcher-service.cjs"
   File "CloudCLI.exe"
   File "icon.ico"
   File "Microsoft.Web.WebView2.Core.dll"
@@ -82,7 +83,7 @@ Section "CloudCLI" SecMain
   WriteRegStr HKCU "Software\CloudCLI" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayName" "CloudCLI"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayIcon" "$INSTDIR\icon.ico"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.3.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.4.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "Publisher" "local"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "UninstallString" "$INSTDIR\Uninstall.exe"
 SectionEnd
@@ -99,6 +100,7 @@ Section "Uninstall"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\WebView2-LICENSE.txt"
   Delete "$INSTDIR\WebView2-NOTICE.txt"
+  Delete "$INSTDIR\launcher-service.cjs"
   Delete "$INSTDIR\CloudCLI.exe"
   Delete "$INSTDIR\icon.ico"
   Delete "$INSTDIR\Microsoft.Web.WebView2.Core.dll"

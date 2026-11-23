@@ -15,8 +15,8 @@ using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
 
 namespace CloudCLI
 {
@@ -77,8 +77,86 @@ namespace CloudCLI
             if (Lang == 2) return tw;
             return en;
         }
-        const int Port = 3001;
-        const string Url = "http://localhost:3001";
+        int Port = 3001;
+        string Url { get { return "http://localhost:" + Port.ToString(CultureInfo.InvariantCulture); } }
+        string setupMode;
+        string SetupFile { get { return Path.Combine(AppDir, "data", "setup.txt"); } }
+
+        void LoadSetup()
+        {
+            if (!File.Exists(SetupFile)) return;
+            var lines = File.ReadAllLines(SetupFile);
+            int port;
+            if (lines.Length != 2 || !int.TryParse(lines[1], out port) || port < 1 || port > 65535) return;
+            if (lines[0] != "auto" && lines[0] != "existing" && lines[0] != "connect") return;
+            setupMode = lines[0];
+            Port = port;
+        }
+
+        void SaveSetup()
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SetupFile));
+            string temp = SetupFile + ".tmp";
+            File.WriteAllLines(temp, new[] { setupMode, Port.ToString(CultureInfo.InvariantCulture) });
+            if (File.Exists(SetupFile)) File.Replace(temp, SetupFile, null);
+            else File.Move(temp, SetupFile);
+        }
+
+        void ShowSetup(string error)
+        {
+            var screen = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1,
+                BackColor = status.BackColor, ForeColor = status.ForeColor, Font = status.Font, AutoScroll = true };
+            screen.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            screen.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var panel = new FlowLayoutPanel { Anchor = AnchorStyles.None, AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false,
+                FlowDirection = FlowDirection.TopDown, Padding = new Padding(16) };
+            var heading = new Label { AutoSize = true, Margin = new Padding(3, 0, 3, 12),
+                Text = T("设置 CloudCLI", "設定 CloudCLI", "Set up CloudCLI") };
+            panel.Controls.Add(heading);
+            if (error != null)
+                panel.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(480, 0), Text = error,
+                    ForeColor = Color.LightSalmon, Margin = new Padding(3, 0, 3, 12) });
+            var automatic = new RadioButton { AutoSize = true, Text = T("帮我配置并启动", "自動設定並啟動", "Set it up for me") };
+            var info = new Label { AutoSize = true, MaximumSize = new Size(440, 0), Text = T(
+                "优先使用已有的 CloudCLI。需要安装时，会通过 npm 安装到启动器自己的目录。需要 WSL、Node.js 22 或更高版本和 npm。",
+                "優先使用現有的 CloudCLI。需要安裝時，會透過 npm 安裝到啟動器自己的目錄。需要 WSL、Node.js 22 以上版本及 npm。",
+                "Use an existing installation or download CloudCLI to the launcher's own folder. Requires WSL, Node.js 22 or later, and npm.") };
+            var custom = new RadioButton { AutoSize = true, Text = T("自定义或使用已有部署", "自訂設定或使用現有部署", "Customize or use an existing setup") };
+            var label = new Label { AutoSize = true, Text = T("本机端口", "本機連接埠", "Local port") };
+            var port = new NumericUpDown { Minimum = 1, Maximum = 65535, Value = Port };
+            var start = new CheckBox { AutoSize = true, Checked = setupMode != "connect", Text = T(
+                "服务未运行时，启动 WSL 中已安装的 CloudCLI", "服務未執行時，啟動 WSL 裡已安裝的 CloudCLI",
+                "Start the installed CloudCLI in WSL if the service is offline") };
+            var next = new Button { AutoSize = true, Text = T("继续", "繼續", "Continue"), ForeColor = SystemColors.ControlText, BackColor = SystemColors.Control };
+            panel.Controls.AddRange(new Control[] { automatic, info, custom, label, port, start, next });
+            custom.CheckedChanged += delegate { label.Visible = port.Visible = start.Visible = custom.Checked; };
+            automatic.Checked = setupMode == null || setupMode == "auto";
+            custom.Checked = !automatic.Checked;
+            label.Visible = port.Visible = start.Visible = custom.Checked;
+            screen.Controls.Add(panel);
+            Controls.Add(screen);
+            screen.BringToFront();
+            status.Visible = false;
+            AcceptButton = next;
+            automatic.Focus();
+            next.Click += async delegate
+            {
+                next.Enabled = false;
+                setupMode = automatic.Checked ? "auto" : start.Checked ? "existing" : "connect";
+                Port = automatic.Checked ? 3001 : (int)port.Value;
+                AcceptButton = null;
+                screen.Dispose();
+                await StartFromWindowAsync(true);
+            };
+        }
+
+        async Task StartFromWindowAsync(bool configure)
+        {
+            SetStatus(T("正在启动 CloudCLI…", "正在啟動 CloudCLI…", "Starting CloudCLI…"));
+            await BootAsync(configure);
+            if (!connected && !exiting) ShowSetup(status.Text);
+        }
 
         enum PortState { Available, CloudCli, Occupied, Unreachable }
         static string AppDir;
@@ -218,7 +296,7 @@ namespace CloudCLI
             catch { }
 
             status = new Label();
-            status.Text = T("正在启动 CloudCLI...", "正在啟動 CloudCLI...", "Starting CloudCLI...");
+            status.Text = T("正在启动 CloudCLI…", "正在啟動 CloudCLI…", "Starting CloudCLI...");
             status.ForeColor = Color.Gainsboro;
             status.BackColor = Color.FromArgb(13, 13, 15);
             status.TextAlign = ContentAlignment.MiddleCenter;
@@ -272,7 +350,13 @@ namespace CloudCLI
 
             serviceMonitor = new System.Windows.Forms.Timer { Interval = 5000 };
             serviceMonitor.Tick += async delegate { await CheckServiceAsync(); };
-            Shown += async delegate { await BootAsync(); };
+            Shown += async delegate
+            {
+                try { LoadSetup(); }
+                catch (IOException e) { Log("could not read setup: " + e.Message); }
+                if (setupMode == null) ShowSetup(null);
+                else await StartFromWindowAsync(false);
+            };
         }
 
         void OpenWindow()
@@ -342,7 +426,7 @@ namespace CloudCLI
             if (!exiting) serviceMonitor.Start();
         }
 
-        async Task BootAsync()
+        async Task BootAsync(bool configure)
         {
             try
             {
@@ -352,13 +436,17 @@ namespace CloudCLI
 
                 if (state == PortState.Available)
                 {
-                    SetStatus(T("正在启动 WSL 里的 CloudCLI 服务...", "正在啟動 WSL 中的 CloudCLI 服務...", "Starting the CloudCLI server in WSL..."));
+                    SetStatus(T("正在 WSL 中启动 CloudCLI 服务…", "正在 WSL 中啟動 CloudCLI 服務…", "Starting the CloudCLI server in WSL..."));
+                    if (setupMode == "connect") throw new InvalidOperationException(T(
+                        "请先启动已有的 CloudCLI 服务，然后重试。", "請先啟動現有的 CloudCLI 服務，再試一次。",
+                        "Start your CloudCLI service, then try again."));
                     await StartServerAsync();
                 }
                 else
                 {
                     Log("using existing CloudCLI server");
                 }
+                if (configure && !exiting) SaveSetup();
             }
             catch (Exception e)
             {
@@ -378,6 +466,10 @@ namespace CloudCLI
         async Task StartServerAsync()
         {
             string distro = await Task.Run(delegate { return DetectDistro(); });
+            if (distro == null) throw new InvalidOperationException(T(
+                "未找到可用的 WSL 发行版。请先安装并初始化一个发行版，然后重试。",
+                "找不到可用的 WSL 發行版。請先安裝發行版並完成初次設定，再試一次。",
+                "No WSL distribution was found. Install a distribution and complete its first-run setup, then try again."));
             Log("distro: " + distro);
 
             // WSL may have started a service while the distribution was detected.
@@ -385,19 +477,22 @@ namespace CloudCLI
             if (exiting || state == PortState.CloudCli) return;
             if (state != PortState.Available) throw PortCheckError(state);
 
-            // Use a private stdin pipe for lifetime control. Only signal the child
-            // created by this supervisor, and end the reader if that child exits.
-            string command = "exec 3<&0; cloudcli start --port " + Port
-                + " > ~/.cloudcli.log 2>&1 & child=$!; "
-                + "(read -r stop <&3; kill -TERM $child 2>/dev/null) & watcher=$!; "
-                + "wait $child; result=$?; kill $watcher 2>/dev/null; exit $result";
-            string args = "-d " + distro + " --cd ~ -e bash -ic \"" + command + "\"";
-            ownedServer = Process.Start(new ProcessStartInfo("wsl.exe", args)
+            var discovery = Stopwatch.StartNew();
+            string node = await Task.Run(delegate { return FindNode(distro); });
+            Log("Selected Node.js after " + discovery.ElapsedMilliseconds + " ms: " + node);
+            if (exiting) return;
+            state = await Task.Run(delegate { return Probe(); });
+            if (exiting || state == PortState.CloudCli) return;
+            if (state != PortState.Available) throw PortCheckError(state);
+            var processInfo = new ProcessStartInfo("wsl.exe", DistroArgument(distro)
+                + " --exec " + QuoteArgument(node) + " ./launcher-service.cjs " + setupMode + " " + Port)
             {
+                WorkingDirectory = AppDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardInput = true
-            });
+            };
+            ownedServer = Process.Start(processInfo);
 
             var startup = Stopwatch.StartNew();
             while (startup.Elapsed < TimeSpan.FromSeconds(120))
@@ -410,30 +505,54 @@ namespace CloudCLI
                     int exitCode = ownedServer.ExitCode;
                     StopOwnedServer();
                     if (state == PortState.CloudCli) return;
+                    if (exitCode == -1)
+                    {
+                        Log("wsl.exe could not start the distribution: " + distro);
+                        throw new InvalidOperationException(T("WSL 未能启动发行版：", "WSL 無法啟動發行版：",
+                            "WSL could not start the distribution: ") + distro);
+                    }
+                    if (setupMode == "auto" && exitCode == 79)
+                        throw new InvalidOperationException(T("CloudCLI 安装失败。请查看启动器目录下的 logs/server.log。",
+                            "無法安裝 CloudCLI。請查看啟動器目錄下的 logs/server.log。", "CloudCLI installation failed. Check logs/server.log in the launcher folder."));
+                    if (exitCode == 76)
+                        throw new InvalidOperationException(T("未检测到 Node.js 管理工具，当前也没有可用的 Node.js 22 或更高版本。请在以下发行版安装 nvm 或 fnm，再安装 Node.js：",
+                            "找不到 Node.js 版本管理工具，也沒有可用的 Node.js 22 以上版本。請先安裝 nvm 或 fnm，再安裝 Node.js：",
+                            "No Node version manager or compatible Node.js runtime was found. Set up nvm or fnm and install Node.js 22 or later in ") + distro);
+                    if (exitCode == 77)
+                        throw new InvalidOperationException(T("未找到 CloudCLI 本体。请先自行安装，或选择“帮我配置并启动”。",
+                            "找不到 CloudCLI。請先自行安裝，或選擇「自動設定並啟動」。",
+                            "CloudCLI is missing. Install it yourself or choose Set it up for me."));
+                    if (exitCode == 80)
+                        throw new InvalidOperationException(T("已找到兼容的 Node.js，但此安装缺少 npm。请修复该 Node.js 安装后重试。",
+                            "已找到相容的 Node.js，但缺少 npm。請修復這個 Node.js 安裝後再試一次。",
+                            "A compatible Node.js was found, but npm is missing. Repair this Node.js installation and try again."));
+                    if (exitCode == 78)
+                        throw new InvalidOperationException(T("已检测到 Node.js 管理工具。请在以下发行版中安装或切换到 Node.js 22 或更高版本：",
+                            "已找到 Node.js 版本管理工具。請在下列發行版安裝或切換至 Node.js 22 以上版本：", "Use your Node version manager to install or select Node.js 22 or later in ") + distro);
                     Log("CloudCLI exited during startup: " + exitCode);
                     throw new InvalidOperationException(T(
-                        "CloudCLI 启动后退出。请检查 WSL 中的 ~/.cloudcli.log。",
-                        "CloudCLI 啟動後結束。請檢查 WSL 中的 ~/.cloudcli.log。",
-                        "CloudCLI exited during startup. Check ~/.cloudcli.log in WSL."));
+                        "CloudCLI 在启动过程中退出了。请查看启动器目录下的 logs/server.log。",
+                        "CloudCLI 在啟動時結束。請查看啟動器目錄下的 logs/server.log。",
+                        "CloudCLI exited during startup. Check logs/server.log in the launcher folder."));
                 }
-                if (state == PortState.CloudCli) { Log("server ready"); return; }
+                if (state == PortState.CloudCli) { Log("server ready after " + startup.ElapsedMilliseconds + " ms"); return; }
                 await Task.Delay(500);
                 if (exiting) return;
             }
             Log("server NOT ready after 120s");
-            throw new Exception(T("服务在 120 秒内没有就绪，详见 logs\\launcher.log", "服務在 120 秒內未就緒，詳見 logs\\launcher.log", "Server did not become ready in 120s - see logs\\launcher.log"));
+            throw new Exception(T("等待服务启动超时（2 分钟）。请查看日志 logs\\launcher.log", "已等候 2 分鐘，服務仍未就緒。請查看記錄檔 logs\\launcher.log", "Timed out after 2 minutes waiting for CloudCLI to start. Check logs\\launcher.log"));
         }
 
         async Task ShowPage()
         {
-            SetStatus(T("正在加载界面...", "正在載入介面...", "Loading UI..."));
+            SetStatus(T("正在加载 CloudCLI 页面…", "正在載入 CloudCLI 網頁…", "Loading CloudCLI…"));
 
             string runtimeVersion = null;
             try { runtimeVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
             if (string.IsNullOrEmpty(runtimeVersion))
             {
                 Log("webview2 runtime missing");
-                SetStatus(T("缺少 WebView2 Runtime，无法显示界面。", "缺少 WebView2 Runtime，無法顯示介面。", "WebView2 Runtime is missing - cannot render the UI."));
+                SetStatus(T("缺少 WebView2 Runtime，无法显示界面。", "缺少 WebView2 Runtime，無法顯示介面。", "Install the Microsoft Edge WebView2 Runtime to display CloudCLI."));
                 PromptInstallRuntime();
                 return;
             }
@@ -472,7 +591,8 @@ namespace CloudCLI
                 };
                 web.CoreWebView2.NavigationCompleted += delegate (object s2, CoreWebView2NavigationCompletedEventArgs ev)
                 {
-                    Log("navigation completed: success=" + ev.IsSuccess + " error=" + ev.WebErrorStatus);
+                    if (ev.IsSuccess) Log("navigation completed successfully");
+                    else Log("navigation failed: " + ev.WebErrorStatus);
                 };
                 web.CoreWebView2.Navigate(Url);
                 Log("navigated");
@@ -482,15 +602,15 @@ namespace CloudCLI
             {
                 if (exiting) return;
                 Log("webview failed: " + e);
-                SetStatus(T("WebView2 初始化失败：", "WebView2 初始化失敗：", "WebView2 init failed: ") + e.Message);
+                SetStatus(T("WebView2 初始化失败：", "WebView2 初始化失敗：", "Could not initialize WebView2: ") + e.Message);
                 PromptInstallRuntime();
             }
         }
 
         static string RuntimePromptText()
         {
-            if (Lang == 1) return "CloudCLI 需要 Microsoft Edge WebView2 Runtime。要打开微软下载页面吗？";
-            if (Lang == 2) return "CloudCLI 需要 Microsoft Edge WebView2 Runtime。要開啟 Microsoft 下載頁面嗎？";
+            if (Lang == 1) return "CloudCLI 需要 Microsoft Edge WebView2 Runtime。是否打开微软的下载页面？";
+            if (Lang == 2) return "CloudCLI 需要 Microsoft Edge WebView2 Runtime。要前往 Microsoft 的下載頁面嗎？";
             return "CloudCLI requires the Microsoft Edge WebView2 Runtime. Open the Microsoft download page?";
         }
 
@@ -528,11 +648,97 @@ namespace CloudCLI
                 }
                 if (ok) return t;
             }
-            return "Ubuntu";
+            return null;
         }
 
-        static string CaptureWsl(string args)
+        static string QuoteArgument(string value)
         {
+            if (value.IndexOfAny(new[] { '"', '\r', '\n', '\0' }) >= 0)
+                throw new ArgumentException("Invalid executable path");
+            return value.Contains(" ") ? "\"" + value + "\"" : value;
+        }
+
+        static string FindNode(string distro)
+        {
+            string prefix = DistroArgument(distro) + " --exec ";
+            string versionOnPath = CaptureWsl(prefix + "/usr/bin/env node --version", expectedMissing: "node");
+            Version parsed;
+            bool compatible = Version.TryParse(versionOnPath.TrimStart('v'), out parsed) && parsed.Major >= 22;
+            // A usable pair on PATH takes precedence over any manager-specific layout.
+            if (compatible && CaptureWsl(prefix + "/usr/bin/env cloudcli --version", expectedMissing: "cloudcli").Length > 0)
+                return "node";
+            string home = CaptureWsl(prefix + "/usr/bin/printenv HOME");
+            var candidates = new System.Collections.Generic.List<string>();
+            bool managerFound = false;
+            string root = @"\\wsl.localhost\" + distro;
+            if (home.StartsWith("/"))
+            {
+                foreach (string relative in new[] { "/.nvm/versions/node", "/.local/share/fnm/node-versions",
+                    "/.volta/tools/image/node", "/.asdf/installs/nodejs", "/.local/share/mise/installs/node",
+                    "/.nodenv/versions" })
+                {
+                    string versions = home + relative;
+                    string directory = root + versions.Replace('/', '\\');
+                    if (!Directory.Exists(directory)) continue;
+                    managerFound = true;
+                    var entries = Directory.GetDirectories(directory);
+                    Array.Sort(entries, delegate(string left, string right)
+                    {
+                        Version a, b;
+                        Version.TryParse(Path.GetFileName(left).TrimStart('v'), out a);
+                        Version.TryParse(Path.GetFileName(right).TrimStart('v'), out b);
+                        return System.Collections.Generic.Comparer<Version>.Default.Compare(b, a);
+                    });
+                    foreach (string entry in entries)
+                    {
+                        string bin = relative.Contains("/fnm/") ? "/installation/bin/node" : "/bin/node";
+                        candidates.Add(versions + "/" + Path.GetFileName(entry) + bin);
+                    }
+                }
+                managerFound |= File.Exists(root + home.Replace('/', '\\') + @"\.nvm\nvm.sh");
+            }
+
+            string fallback = compatible ? "node" : null;
+            foreach (string candidate in candidates)
+            {
+                string version = CaptureWsl(prefix + QuoteArgument(candidate) + " --version");
+                if (!Version.TryParse(version.TrimStart('v'), out parsed) || parsed.Major < 22) continue;
+                if (fallback == null) fallback = candidate;
+                string sibling = candidate.Substring(0, candidate.LastIndexOf('/') + 1) + "cloudcli";
+                if (File.Exists(root + sibling.Replace('/', '\\'))) return candidate;
+            }
+            if (fallback != null) return fallback;
+            if (managerFound) throw new InvalidOperationException(T("请在此发行版中启用 Node.js 22 或更高版本：",
+                "請在此發行版啟用 Node.js 22 以上版本：", "Select Node.js 22 or later in ") + distro);
+            throw new InvalidOperationException(T("未找到可用的 Node.js 或版本管理工具：",
+                "找不到可用的 Node.js 或版本管理工具：", "No compatible Node.js installation or version manager was found in ") + distro);
+        }
+
+        static string DistroArgument(string distro)
+        {
+            if (!distro.Contains(" ")) return "-d " + distro;
+            // Use the registered GUID for multiword names. Some WSL versions
+            // treat quotes around the distribution name as part of the name.
+            using (var registrations = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Lxss"))
+            {
+                if (registrations != null)
+                    foreach (string id in registrations.GetSubKeyNames())
+                        using (var entry = registrations.OpenSubKey(id))
+                        {
+                            Guid guid;
+                            if (entry != null && string.Equals(entry.GetValue("DistributionName") as string,
+                                distro, StringComparison.OrdinalIgnoreCase) && Guid.TryParse(id, out guid))
+                                return "--distribution-id " + guid.ToString("B");
+                        }
+            }
+            throw new InvalidOperationException(T("找不到 WSL 发行版：", "找不到 WSL 發行版：",
+                "Could not find the registered WSL distribution: ") + distro);
+        }
+
+        static string CaptureWsl(string args, string expectedMissing = null)
+        {
+            var timer = Stopwatch.StartNew();
             try
             {
                 var psi = new ProcessStartInfo("wsl.exe", args);
@@ -542,15 +748,35 @@ namespace CloudCLI
                 psi.CreateNoWindow = true;
                 using (var p = Process.Start(psi))
                 {
-                    string outp = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(20000);
-                    return outp.Replace("\0", "").Trim();
+                    var output = p.StandardOutput.ReadToEndAsync();
+                    var errors = p.StandardError.ReadToEndAsync();
+                    if (!p.WaitForExit(20000))
+                    {
+                        Log("WSL probe timed out after " + timer.ElapsedMilliseconds + " ms: " + args);
+                        p.Kill();
+                        return "";
+                    }
+                    string detail = errors.Result.Replace("\0", "").Trim();
+                    string context = args + " (exit " + p.ExitCode + ", " + timer.ElapsedMilliseconds + " ms)";
+                    if (expectedMissing != null && p.ExitCode == 127)
+                    {
+                        Log(expectedMissing + " unavailable on PATH; checking managed installations. " + context);
+                        return "";
+                    }
+                    if (p.ExitCode != 0)
+                    {
+                        if (detail.Length == 0) detail = output.Result.Replace("\0", "").Trim();
+                        Log("WSL probe failed: " + context + (detail.Length == 0 ? "" : " - " + detail));
+                        return "";
+                    }
+                    Log("WSL probe completed: " + context);
+                    return output.Result.Replace("\0", "").Trim();
                 }
             }
-            catch (Exception e) { Log("wsl capture failed: " + e.Message); return ""; }
+            catch (Exception e) { Log("WSL probe error after " + timer.ElapsedMilliseconds + " ms: " + args + " - " + e.Message); return ""; }
         }
 
-        static PortState Probe()
+        PortState Probe()
         {
             using (var client = new TcpClient())
             {
@@ -593,18 +819,18 @@ namespace CloudCLI
             return PortState.Occupied;
         }
 
-        static Exception PortCheckError(PortState state)
+        Exception PortCheckError(PortState state)
         {
             if (state == PortState.Unreachable)
-                return new InvalidOperationException(T(
-                    "无法检查本机端口 3001。请稍后重试。",
-                    "無法檢查本機連接埠 3001。請稍後再試。",
-                    "Could not check local port 3001. Try again."));
+                return new InvalidOperationException(string.Format(T(
+                    "无法检查本机端口 {0}。请稍后重试。",
+                    "無法檢查本機連接埠 {0}。請稍後再試。",
+                    "Could not check local port {0}. Try again."), Port));
 
-            return new InvalidOperationException(T(
-                "端口 3001 已被占用，无法确认该服务是 CloudCLI。",
-                "連接埠 3001 已被占用，無法確認該服務是 CloudCLI。",
-                "Port 3001 is in use and the service could not be identified as CloudCLI."));
+            return new InvalidOperationException(string.Format(T(
+                "端口 {0} 已被占用，无法确认该服务是 CloudCLI。",
+                "連接埠 {0} 使用中，無法確認目前使用它的服務是否為 CloudCLI。",
+                "Port {0} is in use. The launcher could not verify that CloudCLI is running on it."), Port));
         }
 
         static void CopyDir(string from, string to)
