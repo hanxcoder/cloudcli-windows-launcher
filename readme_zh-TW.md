@@ -33,13 +33,7 @@
 
 ## 從原始碼建置
 
-在專案目錄開啟 Windows PowerShell 並執行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-```
-
-指令碼會重建 `dist\`，使用 .NET Framework 4.x 的 64 位元 C# 編譯器建置啟動器，再複製 `lib\` 中的 WebView2 DLL。若在 `%LOCALAPPDATA%\electron-builder\Cache` 找到 NSIS 的 `makensis.exe`，也會產生 `CloudCLI-Setup-1.3.0.exe`。
+在 WSL 的 Bash 中使用 .NET SDK 和 NSIS 編譯並封裝。所需工具、完整指令與輸出路徑請見[英文 README 的建置說明](README.md#build)。
 
 ## 授權條款
 

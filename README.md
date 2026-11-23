@@ -33,13 +33,27 @@ The launcher writes to `logs\launcher.log` under its installation directory. Ser
 
 ## Build
 
-Run the following in Windows PowerShell from the project directory:
+From the project root in WSL, use Bash with a .NET SDK and NSIS on your PATH. The commands below use the .NET Framework 4.8 assemblies from the Windows host mounted at `/mnt/c`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
+```bash
+(
+  set -e
+  sdk=$(dotnet --list-sdks | tail -1)
+  sdk_root=$(sed -n 's/.*\[\(.*\)\]/\1/p' <<< "$sdk")
+  csc="$sdk_root/${sdk%% *}/Roslyn/bincore/csc.dll"
+  fw=/mnt/c/Windows/Microsoft.NET/Framework64/v4.0.30319
+  mkdir -p dist
+  dotnet "$csc" -nologo -nostdlib -target:winexe -platform:x64 \
+    -out:dist/CloudCLI.exe -win32icon:src/icon.ico -win32manifest:src/app.manifest \
+    -r:"$fw"/{mscorlib,System,System.Core,System.Windows.Forms,System.Drawing}.dll \
+    -r:lib/Microsoft.Web.WebView2.{Core,WinForms}.dll src/Program.cs
+  cp lib/*.dll LICENSE WebView2-*.txt src/icon.ico src/installer.nsi dist/
+  cd dist
+  makensis -WX -V2 installer.nsi
+)
 ```
 
-The script recreates `dist\`, compiles the launcher with the 64-bit .NET Framework 4.x C# compiler, and copies the WebView2 DLLs from `lib\`. If it finds NSIS's `makensis.exe` under `%LOCALAPPDATA%\electron-builder\Cache`, it also builds `CloudCLI-Setup-1.3.0.exe`.
+The installer is written to `dist/CloudCLI-Setup-1.3.0.exe`.
 
 ## License
 
