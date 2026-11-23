@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
-這個 Windows 啟動器會在 WSL 中啟動上游 CloudCLI，再透過 WebView2 在 WinForms 視窗中開啟原有的網頁介面。CloudCLI 服務與網頁介面由上游專案提供。
+這個啟動器會在 WSL 中啟動上游 CloudCLI，再透過 WebView2 在 WinForms 視窗中開啟原有的網頁介面。CloudCLI 服務與網頁介面由上游專案提供。
 
 [更新紀錄](CHANGELOG.md)
 
@@ -43,4 +43,4 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 ## 授權條款
 
-本專案的 Windows 啟動器採用 [GPL-3.0-only](LICENSE)。[上游 CloudCLI](https://github.com/siteboon/claudecodeui/blob/main/LICENSE) 採用 AGPLv3。隨附的 Microsoft WebView2 SDK DLL 適用微軟的授權條款。
+本專案的啟動器採用 [GPL-3.0-only](LICENSE)。[上游 CloudCLI](https://github.com/siteboon/claudecodeui/blob/main/LICENSE) 採用 AGPLv3。隨附的 Microsoft WebView2 SDK DLL 適用微軟的授權條款。

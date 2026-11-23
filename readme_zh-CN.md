@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
-这个 Windows 启动器通过 WSL 启动已安装的 `cloudcli`，并在 WinForms 窗口中用 WebView2 打开原有的 Web 界面。安装包包含启动器和 WebView2 SDK DLL，CloudCLI 服务及其 Web 界面由上游提供。
+这个启动器通过 WSL 启动已安装的 `cloudcli`，并在 WinForms 窗口中用 WebView2 打开原有的 Web 界面。安装包包含启动器和 WebView2 SDK DLL，CloudCLI 服务及其 Web 界面由上游提供。
 
 [更新日志](CHANGELOG.md)
 
@@ -29,7 +29,7 @@
 
 启动器先检查端口 3001。已有 CloudCLI 服务时直接打开，端口空闲时在 WSL 启动服务，端口被其他程序占用时显示错误。关闭窗口会隐藏到 Windows 托盘。选择「打开窗口」可恢复窗口，选择「退出」会关闭启动器并停止由它启动的服务。单独启动的服务会继续运行。如果当前连接的服务停止，启动器也会退出。
 
-- Windows 启动器日志在安装目录下的 `logs\launcher.log`。
+- 启动器日志在安装目录下的 `logs\launcher.log`。
 - WSL 服务启动日志在发行版用户目录下的 `~/.cloudcli.log`。
 - WebView2 用户数据在安装目录下的 `data\webview2`。如果该目录尚未创建，启动器会尝试从 `%LOCALAPPDATA%\CloudCLI\webview2` 迁移旧数据。卸载时会删除安装目录内的 `logs` 和 `data`。
 
@@ -45,4 +45,4 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 ## 许可证
 
-本项目的 Windows 启动器采用 [GPL-3.0-only](LICENSE)。[上游 CloudCLI](https://github.com/siteboon/claudecodeui/blob/main/LICENSE) 采用 AGPLv3。随包提供的 Microsoft WebView2 SDK DLL 适用微软的许可条款。
+本项目的启动器采用 [GPL-3.0-only](LICENSE)。[上游 CloudCLI](https://github.com/siteboon/claudecodeui/blob/main/LICENSE) 采用 AGPLv3。随包提供的 Microsoft WebView2 SDK DLL 适用微软的许可条款。
