@@ -1,4 +1,4 @@
-# CloudCLI Desktop Launcher for WSL 1.2.0
+# CloudCLI Desktop Launcher for WSL 1.3.0
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
@@ -18,16 +18,16 @@
    ```
 
    在 Windows 浏览器打开 `http://localhost:3001/`，确认页面能加载。然后在 WSL 终端按 `Ctrl+C` 停掉测试实例，以便验证桌面壳能自动启动服务。
-3. 在 Windows 安装 Microsoft Edge WebView2 Runtime，然后下载并运行 [CloudCLI-Setup-1.2.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v1.2.0/CloudCLI-Setup-1.2.0.exe)。
+3. 在 Windows 安装 Microsoft Edge WebView2 Runtime，然后下载并运行 [CloudCLI-Setup-1.3.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v1.3.0/CloudCLI-Setup-1.3.0.exe)。如需立即启动，可在安装完成页勾选「运行 CloudCLI」，默认不勾选。
 4. 使用安装包时，从开始菜单或桌面快捷方式打开 CloudCLI。确认桌面窗口能加载 CloudCLI 网页。
 
 窗口语言默认跟随 Windows 显示语言，也可以在启动前设置 `CLOUDCLI_LANG` 为 `zh-CN`、`zh-TW` 或 `en`。在窗口中可用 `F5` 刷新，或用 `Ctrl+I` 打开开发者工具。网页请求打开新窗口时，启动器会把链接交给 Windows。
+静默更新已有安装时，用 `/UPDATE` 参数运行安装包。更新会使用已登记的安装目录。找不到已安装的启动器时，安装程序会以退出码 2 结束。
+
 
 ## 服务启停与数据
 
-启动器先请求 `http://localhost:3001/`。探测成功时直接打开页面，否则在 WSL 中执行 `cloudcli start`。如果轮询约 20 秒仍未就绪，1.2.0 会执行 `wsl --shutdown` 后再试一次。这个命令会关闭正在运行的其他 WSL 发行版。
-
-只有启动器尝试自行启动服务时，关窗才会执行 `pkill -f cloudcli`。该命令按命令行匹配进程，同一发行版中其他匹配的进程也可能被结束。
+启动器先检查端口 3001。已有 CloudCLI 服务时直接打开，端口空闲时在 WSL 启动服务，端口被其他程序占用时显示错误。关闭窗口会隐藏到 Windows 托盘。选择「打开窗口」可恢复窗口，选择「退出」会关闭启动器并停止由它启动的服务。单独启动的服务会继续运行。如果当前连接的服务停止，启动器也会退出。
 
 - Windows 启动器日志在安装目录下的 `logs\launcher.log`。
 - WSL 服务启动日志在发行版用户目录下的 `~/.cloudcli.log`。
@@ -41,7 +41,7 @@
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-脚本会重建 `dist\`，用 .NET Framework 4.x 的 64 位 `csc.exe` 编译 `src\Program.cs`，并复制 `lib\` 中的 WebView2 SDK DLL。如果在 `%LOCALAPPDATA%\electron-builder\Cache` 中找到 NSIS 的 `makensis.exe`，脚本还会使用 `src\installer.nsi` 生成 `dist\CloudCLI-Setup-1.2.0.exe`。
+脚本会重建 `dist\`，用 .NET Framework 4.x 的 64 位 `csc.exe` 编译 `src\Program.cs`，并复制 `lib\` 中的 WebView2 SDK DLL。如果在 `%LOCALAPPDATA%\electron-builder\Cache` 中找到 NSIS 的 `makensis.exe`，脚本还会使用 `src\installer.nsi` 生成 `dist\CloudCLI-Setup-1.3.0.exe`。
 
 ## 许可证
 

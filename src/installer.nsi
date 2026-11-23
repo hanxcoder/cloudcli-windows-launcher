@@ -2,9 +2,10 @@
 ManifestDPIAware true
 ManifestDPIAwareness PerMonitorV2
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
 
 Name "CloudCLI"
-OutFile "CloudCLI-Setup-1.2.0.exe"
+OutFile "CloudCLI-Setup-1.3.0.exe"
 InstallDir "$LOCALAPPDATA\Programs\CloudCLI"
 InstallDirRegKey HKCU "Software\CloudCLI" "InstallDir"
 RequestExecutionLevel user
@@ -12,11 +13,11 @@ SetCompressor /SOLID lzma
 Icon "icon.ico"
 UninstallIcon "icon.ico"
 
-VIProductVersion "1.2.0.0"
+VIProductVersion "1.3.0.0"
 VIAddVersionKey "ProductName" "CloudCLI"
 VIAddVersionKey "FileDescription" "CloudCLI desktop window (WebView2)"
-VIAddVersionKey "FileVersion" "1.2.0.0"
-VIAddVersionKey "ProductVersion" "1.2.0.0"
+VIAddVersionKey "FileVersion" "1.3.0.0"
+VIAddVersionKey "ProductVersion" "1.3.0.0"
 VIAddVersionKey "LegalCopyright" "local"
 
 !define MUI_ABORTWARNING
@@ -25,6 +26,8 @@ VIAddVersionKey "LegalCopyright" "local"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_FINISHPAGE_RUN "$INSTDIR\CloudCLI.exe"
+!define MUI_FINISHPAGE_RUN_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -37,8 +40,25 @@ LangString UNINST_LNK ${LANG_SIMPCHINESE} "卸载 CloudCLI"
 LangString UNINST_LNK ${LANG_TRADCHINESE} "解除安裝 CloudCLI"
 
 Function .onInit
-  ; 升级场景：旧版本可能正在运行，先结束它（不存在时忽略错误）
-  nsExec::Exec 'taskkill /IM CloudCLI.exe /F /T'
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/UPDATE" $R1
+  IfErrors closeLauncher
+  StrCmp $R1 "" 0 closeLauncher
+  SetSilent silent
+  ReadRegStr $R0 HKCU "Software\CloudCLI" "InstallDir"
+  StrCmp $R0 "" missingInstall
+  IfFileExists "$R0\CloudCLI.exe" 0 missingInstall
+  StrCpy $INSTDIR $R0
+
+  closeLauncher:
+    nsExec::Exec 'taskkill /IM CloudCLI.exe /F'
+    Pop $R0
+    Return
+
+  missingInstall:
+    SetErrorLevel 2
+    Abort
 FunctionEnd
 
 Section "CloudCLI" SecMain
@@ -62,13 +82,9 @@ Section "CloudCLI" SecMain
   WriteRegStr HKCU "Software\CloudCLI" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayName" "CloudCLI"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayIcon" "$INSTDIR\icon.ico"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.2.0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "DisplayVersion" "1.3.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "Publisher" "local"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CloudCLI" "UninstallString" "$INSTDIR\Uninstall.exe"
-
-  IfSilent done
-  ExecShell "open" "$DESKTOP\CloudCLI.lnk"
-  done:
 SectionEnd
 
 Section "Uninstall"

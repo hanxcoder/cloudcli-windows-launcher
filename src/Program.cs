@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +14,9 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
 
 namespace CloudCLI
 {
@@ -22,11 +28,17 @@ namespace CloudCLI
         [STAThread]
         static void Main()
         {
-            // 兜底：manifest 未生效时（旧系统）也强制 PerMonitorV2
-            try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            bool firstInstance;
+            using (var instance = new Mutex(false, @"Local\CloudCLI.WslLauncher", out firstInstance))
+            {
+                if (!firstInstance) return;
+
+                // 兜底：manifest 未生效时（旧系统）也强制 PerMonitorV2
+                try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MainForm());
+            }
         }
     }
 
@@ -65,14 +77,122 @@ namespace CloudCLI
             if (Lang == 2) return tw;
             return en;
         }
+        const int Port = 3001;
         const string Url = "http://localhost:3001";
+
+        enum PortState { Available, CloudCli, Occupied, Unreachable }
         static string AppDir;
         static string LogPath;
 
         WebView2 web;
         Label status;
-        string distro = "Ubuntu";
-        bool startedByUs;
+        const int TrayMenuCornerDiameter = 16;
+        const int TrayMenuSelectionInset = 4;
+
+        sealed class TrayMenuPopup : ContextMenuStrip
+        {
+            protected override Padding DefaultPadding
+            {
+                get
+                {
+                    Padding padding = base.DefaultPadding;
+                    int cornerRadius = ScalePixels(TrayMenuCornerDiameter, DeviceDpi) / 2;
+                    return new Padding(padding.Left, Math.Max(padding.Top, cornerRadius),
+                        padding.Right, Math.Max(padding.Bottom, cornerRadius));
+                }
+            }
+        }
+
+        sealed class TrayMenuRenderer : ToolStripProfessionalRenderer
+        {
+            protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+            {
+                if (SystemInformation.HighContrast)
+                {
+                    base.OnRenderToolStripBackground(e);
+                    return;
+                }
+
+                using (var brush = new SolidBrush(Color.FromArgb(245, 245, 245)))
+                    e.Graphics.FillRectangle(brush, e.AffectedBounds);
+            }
+
+            protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+            {
+                if (SystemInformation.HighContrast) base.OnRenderToolStripBorder(e);
+            }
+
+            protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+            {
+                if (SystemInformation.HighContrast)
+                {
+                    base.OnRenderSeparator(e);
+                    return;
+                }
+
+                int inset = ScalePixels(12, e.Graphics.DpiX);
+                int y = e.Item.Height / 2;
+                using (var pen = new Pen(Color.FromArgb(222, 222, 222)))
+                    e.Graphics.DrawLine(pen, inset, y, e.Item.Width - inset, y);
+            }
+
+            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+            {
+                Rectangle text = e.TextRectangle;
+                text.Y = (e.Item.Height - text.Height) / 2;
+                e.TextRectangle = text;
+                base.OnRenderItemText(e);
+            }
+
+            protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+            {
+                if (SystemInformation.HighContrast)
+                {
+                    base.OnRenderMenuItemBackground(e);
+                    return;
+                }
+                if (!e.Item.Selected && !e.Item.Pressed) return;
+
+                var menu = e.ToolStrip;
+                float dpi = e.Graphics.DpiX;
+                int inset = ScalePixels(TrayMenuSelectionInset, dpi);
+                Rectangle item = e.Item.Bounds;
+                Rectangle inner = menu.ClientRectangle;
+                inner.Inflate(-inset, -inset);
+
+                Rectangle bounds = Rectangle.Intersect(item, inner);
+                bounds.Offset(-item.Left, -item.Top);
+                if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+                using (var brush = new SolidBrush(Color.FromArgb(218, 218, 218)))
+                    e.Graphics.FillRectangle(brush, bounds);
+            }
+        }
+
+        static int ScalePixels(int value, float dpi)
+        {
+            return Math.Max(1, (int)Math.Round(value * dpi / 96f));
+        }
+
+        static GraphicsPath RoundedRectangle(Rectangle bounds, int diameter)
+        {
+            diameter = Math.Min(diameter, Math.Min(bounds.Width, bounds.Height));
+            var path = new GraphicsPath();
+            path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        NotifyIcon tray;
+        ContextMenuStrip trayMenu;
+        System.Windows.Forms.Timer serviceMonitor;
+        Process ownedServer;
+        bool connected;
+        bool exiting;
+        int failedChecks;
 
         public MainForm()
         {
@@ -120,62 +240,185 @@ namespace CloudCLI
                     e.Handled = true;
                 }
             };
+            trayMenu = new TrayMenuPopup
+            {
+                ShowImageMargin = false,
+                DropShadowEnabled = true,
+                Renderer = new TrayMenuRenderer()
+            };
+            trayMenu.Opened += delegate
+            {
+                Version windowsVersion = Environment.OSVersion.Version;
+                if (windowsVersion.Major < 10 || windowsVersion.Build < 22000 || SystemInformation.HighContrast)
+                {
+                    trayMenu.Region = null;
+                    return;
+                }
+
+                using (var graphics = trayMenu.CreateGraphics())
+                using (var path = RoundedRectangle(trayMenu.ClientRectangle, ScalePixels(TrayMenuCornerDiameter, graphics.DpiX)))
+                    trayMenu.Region = new Region(path);
+            };
+            trayMenu.Items.Add(T("打开窗口", "開啟視窗", "Open window"), null, delegate { OpenWindow(); });
+            trayMenu.Items.Add(new ToolStripSeparator());
+            trayMenu.Items.Add(T("退出", "結束", "Exit"), null, delegate { ExitLauncher(); });
+            foreach (ToolStripItem item in trayMenu.Items)
+                if (item is ToolStripMenuItem) item.Padding = new Padding(12, 5, 12, 5);
+            tray = new NotifyIcon { Icon = Icon ?? SystemIcons.Application, Text = "CloudCLI", ContextMenuStrip = trayMenu, Visible = true };
+            tray.MouseClick += delegate (object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left) OpenWindow();
+            };
+
+            serviceMonitor = new System.Windows.Forms.Timer { Interval = 5000 };
+            serviceMonitor.Tick += async delegate { await CheckServiceAsync(); };
             Shown += async delegate { await BootAsync(); };
-            FormClosing += delegate { StopServer(); };
+        }
+
+        void OpenWindow()
+        {
+            Show();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
+        void ExitLauncher()
+        {
+            exiting = true;
+            Close();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (e.CloseReason == CloseReason.UserClosing && connected && !exiting)
+            {
+                e.Cancel = true;
+                Hide();
+            }
+            base.OnFormClosing(e);
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            exiting = true;
+            serviceMonitor.Dispose();
+            tray.Visible = false;
+            tray.Dispose();
+            trayMenu.Dispose();
+            StopOwnedServer();
+            base.OnFormClosed(e);
+        }
+
+        void StopOwnedServer()
+        {
+            if (ownedServer == null) return;
+
+            // EOF on the control pipe tells the WSL supervisor to stop its own child.
+            try { ownedServer.StandardInput.Close(); }
+            catch (IOException e) { Log("could not close server control pipe: " + e.Message); }
+            finally
+            {
+                ownedServer.Dispose();
+                ownedServer = null;
+            }
+        }
+
+        async Task CheckServiceAsync()
+        {
+            serviceMonitor.Stop();
+            if (ownedServer != null)
+            {
+                if (ownedServer.HasExited) ExitLauncher();
+            }
+            else
+            {
+                PortState state = await Task.Run(delegate { return Probe(); });
+                if (exiting) return;
+
+                failedChecks = state == PortState.CloudCli ? 0 : failedChecks + 1;
+                if (failedChecks >= 2) ExitLauncher();
+            }
+
+            if (!exiting) serviceMonitor.Start();
         }
 
         async Task BootAsync()
         {
             try
             {
-                distro = DetectDistro();
-                Log("distro: " + distro);
+                PortState state = await Task.Run(delegate { return Probe(); });
+                if (exiting) return;
+                if (state != PortState.Available && state != PortState.CloudCli) throw PortCheckError(state);
 
-                if (!Probe())
+                if (state == PortState.Available)
                 {
-                    startedByUs = true;
-                    Log("starting server");
                     SetStatus(T("正在启动 WSL 里的 CloudCLI 服务...", "正在啟動 WSL 中的 CloudCLI 服務...", "Starting the CloudCLI server in WSL..."));
-                    await Task.Run(delegate { StartServer(); });
+                    await StartServerAsync();
                 }
                 else
                 {
-                    Log("server already running");
+                    Log("using existing CloudCLI server");
                 }
             }
             catch (Exception e)
             {
+                if (exiting) return;
+                StopOwnedServer();
                 Log("boot failed: " + e);
                 SetStatus(T("启动失败：", "啟動失敗：", "Startup failed: ") + e.Message);
                 return;
             }
 
+            if (exiting) return;
+            connected = true;
+            serviceMonitor.Start();
             await ShowPage();
         }
 
-        void StartServer()
+        async Task StartServerAsync()
         {
-            string cli = CaptureWsl("-d " + distro + " -e bash -ic \"command -v cloudcli\"");
-            Log("cloudcli: " + cli);
-            string exe = string.IsNullOrEmpty(cli) ? "cloudcli" : cli;
-            string inner = "nohup " + exe + " start > $HOME/.cloudcli.log 2>&1 & disown";
-            string arg = "-d " + distro + " -e bash -ic \"" + inner + "\"";
-            Log("start args: " + arg);
-            StartDetached("wsl.exe", arg);
+            string distro = await Task.Run(delegate { return DetectDistro(); });
+            Log("distro: " + distro);
 
-            int waited = 0;
-            while (waited < 240)
+            // WSL may have started a service while the distribution was detected.
+            PortState state = await Task.Run(delegate { return Probe(); });
+            if (exiting || state == PortState.CloudCli) return;
+            if (state != PortState.Available) throw PortCheckError(state);
+
+            // Use a private stdin pipe for lifetime control. Only signal the child
+            // created by this supervisor, and end the reader if that child exits.
+            string command = "exec 3<&0; cloudcli start --port " + Port
+                + " > ~/.cloudcli.log 2>&1 & child=$!; "
+                + "(read -r stop <&3; kill -TERM $child 2>/dev/null) & watcher=$!; "
+                + "wait $child; result=$?; kill $watcher 2>/dev/null; exit $result";
+            string args = "-d " + distro + " --cd ~ -e bash -ic \"" + command + "\"";
+            ownedServer = Process.Start(new ProcessStartInfo("wsl.exe", args)
             {
-                Thread.Sleep(500);
-                waited++;
-                if (Probe()) { Log("server ready"); return; }
-                if (waited == 40)
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true
+            });
+
+            var startup = Stopwatch.StartNew();
+            while (startup.Elapsed < TimeSpan.FromSeconds(120))
+            {
+                state = await Task.Run(delegate { return Probe(); });
+                if (exiting) return;
+
+                if (ownedServer.HasExited)
                 {
-                    Log("still down after 20s, rebooting WSL and retrying");
-                    StartDetached("wsl.exe", "--shutdown");
-                    Thread.Sleep(3000);
-                    StartDetached("wsl.exe", arg);
+                    int exitCode = ownedServer.ExitCode;
+                    StopOwnedServer();
+                    if (state == PortState.CloudCli) return;
+                    Log("CloudCLI exited during startup: " + exitCode);
+                    throw new InvalidOperationException(T(
+                        "CloudCLI 启动后退出。请检查 WSL 中的 ~/.cloudcli.log。",
+                        "CloudCLI 啟動後結束。請檢查 WSL 中的 ~/.cloudcli.log。",
+                        "CloudCLI exited during startup. Check ~/.cloudcli.log in WSL."));
                 }
+                if (state == PortState.CloudCli) { Log("server ready"); return; }
+                await Task.Delay(500);
+                if (exiting) return;
             }
             Log("server NOT ready after 120s");
             throw new Exception(T("服务在 120 秒内没有就绪，详见 logs\\launcher.log", "服務在 120 秒內未就緒，詳見 logs\\launcher.log", "Server did not become ready in 120s - see logs\\launcher.log"));
@@ -218,6 +461,7 @@ namespace CloudCLI
                 web.BringToFront();
 
                 await web.EnsureCoreWebView2Async(null);
+                if (exiting) return;
                 web.CoreWebView2.Settings.AreDevToolsEnabled = true;
                 web.CoreWebView2.Settings.IsStatusBarEnabled = false;
                 web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
@@ -236,6 +480,7 @@ namespace CloudCLI
             }
             catch (Exception e)
             {
+                if (exiting) return;
                 Log("webview failed: " + e);
                 SetStatus(T("WebView2 初始化失败：", "WebView2 初始化失敗：", "WebView2 init failed: ") + e.Message);
                 PromptInstallRuntime();
@@ -267,15 +512,6 @@ namespace CloudCLI
                 else { status.Text = text; status.Visible = true; }
             }
             catch { }
-        }
-
-        void StopServer()
-        {
-            if (!startedByUs) return;
-            startedByUs = false;
-            Log("stopping cloudcli");
-            try { StartDetached("wsl.exe", "-d " + distro + " -e bash -ic \"pkill -f cloudcli\""); } catch { }
-            Log("--- window close ---");
         }
 
         static string DetectDistro()
@@ -314,30 +550,61 @@ namespace CloudCLI
             catch (Exception e) { Log("wsl capture failed: " + e.Message); return ""; }
         }
 
-        static void StartDetached(string file, string args)
+        static PortState Probe()
         {
+            using (var client = new TcpClient())
+            {
+                try
+                {
+                    var connection = client.ConnectAsync("localhost", Port);
+                    if (!connection.Wait(5000)) return PortState.Unreachable;
+                }
+                catch (AggregateException e)
+                {
+                    var socketError = e.GetBaseException() as SocketException;
+                    return socketError != null && socketError.SocketErrorCode == SocketError.ConnectionRefused
+                        ? PortState.Available : PortState.Unreachable;
+                }
+            }
+
             try
             {
-                var psi = new ProcessStartInfo(file, args);
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                Process.Start(psi);
+                var request = (HttpWebRequest)WebRequest.Create(Url + "/");
+                request.Timeout = 2000;
+                request.ReadWriteTimeout = 2000;
+                request.AllowAutoRedirect = false;
+                request.Proxy = null;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                using (var reader = new StreamReader(response.GetResponseStream()))
+                {
+                    if (response.StatusCode != HttpStatusCode.OK) return PortState.Occupied;
+
+                    // Older CloudCLI releases can still use the original page title.
+                    var prefix = new char[8192];
+                    int length = reader.ReadBlock(prefix, 0, prefix.Length);
+                    const string cloudCliTitle = @"<title>\s*(CloudCLI(?: UI)?|Claude Code UI)\s*</title>";
+                    if (Regex.IsMatch(new string(prefix, 0, length), cloudCliTitle, RegexOptions.IgnoreCase))
+                        return PortState.CloudCli;
+                }
             }
-            catch (Exception e) { Log("start failed: " + e.Message); }
+            catch (WebException) { }
+            catch (IOException) { }
+
+            return PortState.Occupied;
         }
 
-        static bool Probe()
+        static Exception PortCheckError(PortState state)
         {
-            try
-            {
-                var req = (HttpWebRequest)WebRequest.Create(Url + "/");
-                req.Timeout = 2000;
-                req.ReadWriteTimeout = 2000;
-                req.Proxy = null;
-                using (var resp = (HttpWebResponse)req.GetResponse()) return (int)resp.StatusCode < 400;
-            }
-            catch { return false; }
+            if (state == PortState.Unreachable)
+                return new InvalidOperationException(T(
+                    "无法检查本机端口 3001。请稍后重试。",
+                    "無法檢查本機連接埠 3001。請稍後再試。",
+                    "Could not check local port 3001. Try again."));
+
+            return new InvalidOperationException(T(
+                "端口 3001 已被占用，无法确认该服务是 CloudCLI。",
+                "連接埠 3001 已被占用，無法確認該服務是 CloudCLI。",
+                "Port 3001 is in use and the service could not be identified as CloudCLI."));
         }
 
         static void CopyDir(string from, string to)

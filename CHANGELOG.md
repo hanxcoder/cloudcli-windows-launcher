@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 · 2026-11-23
+
+- Closing the desktop window keeps CloudCLI available to browser sessions. Use the tray menu to reopen the window or exit. Exiting stops a service started by the launcher and leaves independently started services running.
+- The launcher checks port 3001 before startup and reuses an existing CloudCLI service. A second launch leaves the running instance in place.
+- The installer now offers to launch CloudCLI on the finish page. The option is off by default.
+- Run the installer with `/UPDATE` to update an existing installation silently.
+
 ## 1.2.0 · 2026-11-23
 
 First public Windows x64 installer. Changes since 1.0.0:
