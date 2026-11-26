@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -15,8 +16,8 @@ using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
 
 namespace CloudCLI
 {
@@ -102,58 +103,740 @@ namespace CloudCLI
             else File.Move(temp, SetupFile);
         }
 
+        bool webReady;
+        bool showingInternalPage;
+        bool setupSubmitting;
+
+        async Task<bool> EnsureWebViewAsync()
+        {
+            if (webReady && web != null && web.CoreWebView2 != null) return true;
+
+            string runtimeVersion = null;
+            try { runtimeVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
+            if (string.IsNullOrEmpty(runtimeVersion))
+            {
+                Log("webview2 runtime missing");
+                SetStatus(T("缺少 WebView2 Runtime，无法显示界面。", "缺少 WebView2 Runtime，無法顯示介面。", "Install the Microsoft Edge WebView2 Runtime to display CloudCLI."));
+                PromptInstallRuntime();
+                return false;
+            }
+            Log("webview2 runtime: " + runtimeVersion);
+
+            try
+            {
+                string profile = Path.Combine(AppDir, "data", "webview2");
+                string legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudCLI", "webview2");
+                try
+                {
+                    if (!Directory.Exists(profile) && Directory.Exists(legacy))
+                    {
+                        Log("migrating webview2 data from " + legacy);
+                        CopyDir(legacy, profile);
+                    }
+                }
+                catch (Exception ex) { Log("migrate failed: " + ex.Message); }
+                Directory.CreateDirectory(profile);
+
+                web = new WebView2();
+                web.Dock = DockStyle.Fill;
+                web.DefaultBackgroundColor = Color.FromArgb(13, 13, 15);
+                web.CreationProperties = new CoreWebView2CreationProperties { UserDataFolder = profile };
+                Controls.Add(web);
+                web.BringToFront();
+
+                await web.EnsureCoreWebView2Async(null);
+                if (exiting) return false;
+                web.CoreWebView2.Settings.AreDevToolsEnabled = true;
+                web.CoreWebView2.Settings.IsStatusBarEnabled = false;
+                web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+                web.CoreWebView2.NewWindowRequested += delegate (object s, CoreWebView2NewWindowRequestedEventArgs e)
+                {
+                    e.Handled = true;
+                    try { Process.Start(e.Uri); } catch { }
+                };
+                web.CoreWebView2.NavigationCompleted += delegate (object s2, CoreWebView2NavigationCompletedEventArgs ev)
+                {
+                    if (!showingInternalPage)
+                    {
+                        if (ev.IsSuccess) Log("navigation completed successfully");
+                        else Log("navigation failed: " + ev.WebErrorStatus);
+                    }
+                };
+                web.CoreWebView2.WebMessageReceived += async delegate (object s, CoreWebView2WebMessageReceivedEventArgs ev)
+                {
+                    await HandleWebMessageAsync(ev);
+                };
+                webReady = true;
+                return true;
+            }
+            catch (Exception e)
+            {
+                if (exiting) return false;
+                Log("webview failed: " + e);
+                SetStatus(T("WebView2 初始化失败：", "WebView2 初始化失敗：", "Could not initialize WebView2: ") + e.Message);
+                PromptInstallRuntime();
+                return false;
+            }
+        }
+
+        async Task HandleWebMessageAsync(CoreWebView2WebMessageReceivedEventArgs ev)
+        {
+            if (exiting || connected || !showingInternalPage || setupSubmitting) return;
+            string message;
+            try { message = ev.TryGetWebMessageAsString(); }
+            catch { return; }
+            if (string.IsNullOrEmpty(message)) return;
+
+            string[] parts = message.Split('|');
+            if (parts.Length != 3 || parts[0] != "submit") return;
+            string mode = parts[1];
+            int chosenPort;
+            if (mode != "auto" && mode != "existing" && mode != "connect") return;
+            if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out chosenPort) || chosenPort < 1 || chosenPort > 65535) return;
+
+            setupSubmitting = true;
+            setupMode = mode;
+            Port = mode == "auto" ? 3001 : chosenPort;
+            try
+            {
+                await StartFromWindowAsync(true);
+            }
+            finally
+            {
+                setupSubmitting = false;
+            }
+        }
+
         void ShowSetup(string error)
         {
-            var screen = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1,
-                BackColor = status.BackColor, ForeColor = status.ForeColor, Font = status.Font, AutoScroll = true };
-            screen.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            screen.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var panel = new FlowLayoutPanel { Anchor = AnchorStyles.None, AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false,
-                FlowDirection = FlowDirection.TopDown, Padding = new Padding(16) };
-            var heading = new Label { AutoSize = true, Margin = new Padding(3, 0, 3, 12),
-                Text = T("设置 CloudCLI", "設定 CloudCLI", "Set up CloudCLI") };
-            panel.Controls.Add(heading);
-            if (error != null)
-                panel.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(480, 0), Text = error,
-                    ForeColor = Color.LightSalmon, Margin = new Padding(3, 0, 3, 12) });
-            var automatic = new RadioButton { AutoSize = true, Text = T("帮我配置并启动", "自動設定並啟動", "Set it up for me") };
-            var info = new Label { AutoSize = true, MaximumSize = new Size(440, 0), Text = T(
-                "优先使用已有的 CloudCLI。需要安装时，会通过 npm 安装到启动器自己的目录。需要 WSL、Node.js 22 或更高版本和 npm。",
-                "優先使用現有的 CloudCLI。需要安裝時，會透過 npm 安裝到啟動器自己的目錄。需要 WSL、Node.js 22 以上版本及 npm。",
-                "Use an existing installation or download CloudCLI to the launcher's own folder. Requires WSL, Node.js 22 or later, and npm.") };
-            var custom = new RadioButton { AutoSize = true, Text = T("自定义或使用已有部署", "自訂設定或使用現有部署", "Customize or use an existing setup") };
-            var label = new Label { AutoSize = true, Text = T("本机端口", "本機連接埠", "Local port") };
-            var port = new NumericUpDown { Minimum = 1, Maximum = 65535, Value = Port };
-            var start = new CheckBox { AutoSize = true, Checked = setupMode != "connect", Text = T(
-                "服务未运行时，启动 WSL 中已安装的 CloudCLI", "服務未執行時，啟動 WSL 裡已安裝的 CloudCLI",
-                "Start the installed CloudCLI in WSL if the service is offline") };
-            var next = new Button { AutoSize = true, Text = T("继续", "繼續", "Continue"), ForeColor = SystemColors.ControlText, BackColor = SystemColors.Control };
-            panel.Controls.AddRange(new Control[] { automatic, info, custom, label, port, start, next });
-            custom.CheckedChanged += delegate { label.Visible = port.Visible = start.Visible = custom.Checked; };
-            automatic.Checked = setupMode == null || setupMode == "auto";
-            custom.Checked = !automatic.Checked;
-            label.Visible = port.Visible = start.Visible = custom.Checked;
-            screen.Controls.Add(panel);
-            Controls.Add(screen);
-            screen.BringToFront();
-            status.Visible = false;
-            AcceptButton = next;
-            automatic.Focus();
-            next.Click += async delegate
+            if (!webReady || web == null || web.CoreWebView2 == null)
             {
-                next.Enabled = false;
-                setupMode = automatic.Checked ? "auto" : start.Checked ? "existing" : "connect";
-                Port = automatic.Checked ? 3001 : (int)port.Value;
-                AcceptButton = null;
-                screen.Dispose();
-                await StartFromWindowAsync(true);
-            };
+                SetStatus(error ?? T("缺少 WebView2 Runtime，无法显示设置界面。", "缺少 WebView2 Runtime，無法顯示設定介面。", "WebView2 Runtime is required to display setup."));
+                return;
+            }
+            showingInternalPage = true;
+            status.Visible = false;
+            web.Visible = true;
+            web.BringToFront();
+            web.CoreWebView2.NavigateToString(BuildSetupHtml(error));
+            web.Focus();
+        }
+
+        void ShowLoading(string text)
+        {
+            if (!webReady || web == null || web.CoreWebView2 == null)
+            {
+                SetStatus(text);
+                return;
+            }
+            showingInternalPage = true;
+            status.Visible = false;
+            web.Visible = true;
+            web.BringToFront();
+            web.CoreWebView2.NavigateToString(BuildLoadingHtml(text));
+        }
+
+        static string JsEscape(string value)
+        {
+            if (value == null) return "";
+            return value.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "").Replace("\n", "\\n").Replace("</", "<\\/");
+        }
+
+        static string Html(string value)
+        {
+            return WebUtility.HtmlEncode(value ?? "");
+        }
+
+        static string SharedCss()
+        {
+            return @"
+                :root {
+                    --bg: #0d0d0f;
+                    --surface: #15161a;
+                    --surface-hover: #1b1d23;
+                    --surface-active: #171d29;
+                    --border: rgba(255, 255, 255, 0.08);
+                    --border-strong: rgba(255, 255, 255, 0.16);
+                    --accent: #3b82f6;
+                    --accent-hover: #2563eb;
+                    --accent-soft: rgba(59, 130, 246, 0.14);
+                    --text: #f3f4f6;
+                    --text-secondary: #9ca3af;
+                    --text-muted: #6b7280;
+                    --danger-bg: rgba(239, 68, 68, 0.10);
+                    --danger-border: rgba(239, 68, 68, 0.32);
+                    --danger-text: #fca5a5;
+                    --radius: 14px;
+                }
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                html, body {
+                    height: 100%;
+                    background: var(--bg);
+                    color: var(--text);
+                    font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
+                    -webkit-font-smoothing: antialiased;
+                    user-select: none;
+                }
+                body {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    background-image:
+                        radial-gradient(640px 320px at 50% 0%, rgba(59, 130, 246, 0.12), transparent 70%),
+                        radial-gradient(480px 280px at 85% 100%, rgba(99, 102, 241, 0.07), transparent 70%);
+                }
+            ";
+        }
+
+        static string LogoSvg()
+        {
+            return @"<svg width=""26"" height=""26"" viewBox=""0 0 24 24"" fill=""none"" aria-hidden=""true"">
+                <rect x=""2.5"" y=""3.5"" width=""19"" height=""17"" rx=""4.5"" stroke=""#60a5fa"" stroke-width=""1.7""/>
+                <path d=""M7.5 9.5L10.5 12L7.5 14.5"" stroke=""#f3f4f6"" stroke-width=""1.8"" stroke-linecap=""round"" stroke-linejoin=""round""/>
+                <path d=""M12.5 14.5H16.5"" stroke=""#60a5fa"" stroke-width=""1.8"" stroke-linecap=""round""/>
+            </svg>";
+        }
+
+        string BuildLoadingHtml(string message)
+        {
+            return "<!DOCTYPE html><html lang=\"" + LangName() + "\"><head><meta charset=\"utf-8\">"
+                + "<style>" + SharedCss() + @"
+                .wrap {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 20px;
+                    text-align: center;
+                    max-width: 480px;
+                }
+                .brand {
+                    width: 56px;
+                    height: 56px;
+                    border-radius: 16px;
+                    background: linear-gradient(145deg, rgba(59, 130, 246, 0.18), rgba(99, 102, 241, 0.08));
+                    border: 1px solid rgba(96, 165, 250, 0.25);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+                }
+                .spinner {
+                    width: 24px;
+                    height: 24px;
+                    border: 2.5px solid rgba(255, 255, 255, 0.12);
+                    border-top-color: #60a5fa;
+                    border-radius: 50%;
+                    animation: spin 0.8s linear infinite;
+                }
+                @keyframes spin { to { transform: rotate(360deg); } }
+                .status-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                }
+                .msg {
+                    font-size: 14.5px;
+                    color: var(--text-secondary);
+                    line-height: 1.5;
+                    user-select: text;
+                }
+                .sub {
+                    font-size: 12px;
+                    color: var(--text-muted);
+                    letter-spacing: 0.02em;
+                }
+                </style></head><body>
+                <div class=""wrap"">
+                    <div class=""brand"">" + LogoSvg() + @"</div>
+                    <div class=""status-row"">
+                        <div class=""spinner""></div>
+                        <div class=""msg"" id=""statusText"">" + Html(message) + @"</div>
+                    </div>
+                    <div class=""sub"">CloudCLI Desktop Launcher for WSL</div>
+                </div>
+                <script>
+                    window.__setStatus = function(t) {
+                        var el = document.getElementById('statusText');
+                        if (el) el.textContent = t;
+                    };
+                </script></body></html>";
+        }
+
+        string BuildSetupHtml(string error)
+        {
+            bool isAuto = setupMode == null || setupMode == "auto";
+            bool startWhenOffline = setupMode != "connect";
+            string title = T("设置 CloudCLI", "設定 CloudCLI", "Set up CloudCLI");
+            string subtitle = T(
+                "选择启动方式，连接 WSL 中的 CloudCLI 服务",
+                "選擇啟動方式，連線至 WSL 中的 CloudCLI 服務",
+                "Choose how to connect to CloudCLI in WSL");
+            string autoTitle = T("帮我配置并启动", "自動設定並啟動", "Set it up for me");
+            string recommended = T("推荐", "推薦", "Recommended");
+            string autoDesc = T(
+                "优先复用已有的 CloudCLI；需要安装时，会通过 npm 安装到启动器自己的目录。需要 WSL、Node.js 22 或更高版本和 npm。",
+                "優先使用現有的 CloudCLI；需要安裝時，會透過 npm 安裝到啟動器自己的目錄。需要 WSL、Node.js 22 以上版本及 npm。",
+                "Use an existing installation or download CloudCLI to the launcher's own folder. Requires WSL, Node.js 22 or later, and npm.");
+            string customTitle = T("自定义或使用已有部署", "自訂設定或使用現有部署", "Customize or use an existing setup");
+            string customDesc = T(
+                "指定自定义本机端口，或直接连接你自己管理的 CloudCLI 服务。",
+                "指定自訂本機連接埠，或直接連線至你自行管理的 CloudCLI 服務。",
+                "Use a custom local port or connect directly to a service you manage yourself.");
+            string portLabel = T("本机端口", "本機連接埠", "Local port");
+            string portHint = T("范围 1 – 65535", "範圍 1 – 65535", "Range 1 – 65535");
+            string portErrText = T("请输入 1 到 65535 之间的有效端口号", "請輸入 1 到 65535 之間的有效連接埠號碼", "Enter a valid port number between 1 and 65535");
+            string startLabel = T(
+                "服务未运行时，自动启动 WSL 中已安装的 CloudCLI",
+                "服務未執行時，自動啟動 WSL 裡已安裝的 CloudCLI",
+                "Start the installed CloudCLI in WSL if the service is offline");
+            string continueText = T("继续", "繼續", "Continue");
+            string startingText = T("正在启动…", "正在啟動…", "Starting…");
+            string footerHint = T(
+                "首次连接成功后会自动记住你的选择",
+                "首次連線成功後會自動記住你的選擇",
+                "Your choice will be saved after a successful connection");
+
+            string errorHtml = "";
+            if (!string.IsNullOrEmpty(error))
+            {
+                errorHtml = @"<div class=""alert"" role=""alert"">
+                    <svg class=""alert-icon"" width=""18"" height=""18"" viewBox=""0 0 24 24"" fill=""none"">
+                        <circle cx=""12"" cy=""12"" r=""9.5"" stroke=""#f87171"" stroke-width=""1.8""/>
+                        <path d=""M12 7.5V12.5"" stroke=""#f87171"" stroke-width=""1.8"" stroke-linecap=""round""/>
+                        <circle cx=""12"" cy=""16.2"" r=""1"" fill=""#f87171""/>
+                    </svg>
+                    <div class=""alert-text"">" + Html(error) + @"</div>
+                </div>";
+            }
+
+            return "<!DOCTYPE html><html lang=\"" + LangName() + "\"><head><meta charset=\"utf-8\">"
+                + "<style>" + SharedCss() + @"
+                .card {
+                    width: 100%;
+                    max-width: 540px;
+                    background: var(--surface);
+                    border: 1px solid var(--border);
+                    border-radius: 20px;
+                    padding: 32px;
+                    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+                }
+                .header {
+                    display: flex;
+                    align-items: center;
+                    gap: 14px;
+                    margin-bottom: 24px;
+                }
+                .logo {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 12px;
+                    background: linear-gradient(145deg, rgba(59, 130, 246, 0.2), rgba(99, 102, 241, 0.08));
+                    border: 1px solid rgba(96, 165, 250, 0.28);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                }
+                .title {
+                    font-size: 20px;
+                    font-weight: 600;
+                    letter-spacing: -0.01em;
+                    color: var(--text);
+                }
+                .subtitle {
+                    font-size: 13px;
+                    color: var(--text-secondary);
+                    margin-top: 3px;
+                }
+                .alert {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 10px;
+                    background: var(--danger-bg);
+                    border: 1px solid var(--danger-border);
+                    border-radius: 12px;
+                    padding: 12px 14px;
+                    margin-bottom: 20px;
+                }
+                .alert-icon { flex-shrink: 0; margin-top: 1px; }
+                .alert-text {
+                    font-size: 13px;
+                    line-height: 1.55;
+                    color: var(--danger-text);
+                    user-select: text;
+                    word-break: break-word;
+                }
+                .options {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
+                }
+                .option {
+                    border: 1px solid var(--border);
+                    border-radius: var(--radius);
+                    padding: 16px 18px;
+                    background: rgba(255, 255, 255, 0.015);
+                    cursor: pointer;
+                    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+                }
+                .option:hover {
+                    background: var(--surface-hover);
+                    border-color: var(--border-strong);
+                }
+                .option.selected {
+                    background: var(--surface-active);
+                    border-color: rgba(59, 130, 246, 0.65);
+                    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+                }
+                .opt-head {
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                }
+                .radio {
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 50%;
+                    border: 2px solid var(--text-muted);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                    transition: border-color 0.15s ease;
+                }
+                .option.selected .radio {
+                    border-color: var(--accent);
+                }
+                .radio::after {
+                    content: '';
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background: var(--accent);
+                    transform: scale(0);
+                    transition: transform 0.15s ease;
+                }
+                .option.selected .radio::after {
+                    transform: scale(1);
+                }
+                .opt-title-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                    flex: 1;
+                }
+                .opt-title {
+                    font-size: 14.5px;
+                    font-weight: 600;
+                    color: var(--text);
+                }
+                .badge {
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 2px 8px;
+                    border-radius: 999px;
+                    background: var(--accent-soft);
+                    color: #93c5fd;
+                    border: 1px solid rgba(96, 165, 250, 0.25);
+                }
+                .pill {
+                    font-size: 11px;
+                    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+                    padding: 2px 7px;
+                    border-radius: 6px;
+                    background: rgba(255, 255, 255, 0.05);
+                    color: var(--text-secondary);
+                    margin-left: auto;
+                }
+                .opt-desc {
+                    font-size: 12.8px;
+                    line-height: 1.55;
+                    color: var(--text-secondary);
+                    margin-top: 8px;
+                    padding-left: 30px;
+                }
+                .custom-fields {
+                    margin-top: 14px;
+                    padding-top: 14px;
+                    padding-left: 30px;
+                    border-top: 1px solid var(--border);
+                    display: none;
+                    flex-direction: column;
+                    gap: 14px;
+                }
+                .option.selected .custom-fields {
+                    display: flex;
+                }
+                .field-row {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px;
+                }
+                .field-label {
+                    font-size: 13px;
+                    color: var(--text);
+                    font-weight: 500;
+                }
+                .field-hint {
+                    font-size: 11.5px;
+                    color: var(--text-muted);
+                    margin-top: 2px;
+                }
+                .port-input {
+                    width: 124px;
+                    height: 36px;
+                    padding: 0 12px;
+                    border-radius: 9px;
+                    border: 1px solid var(--border-strong);
+                    background: #0d0e12;
+                    color: var(--text);
+                    font-size: 14px;
+                    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+                    text-align: right;
+                    outline: none;
+                    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+                }
+                .port-input:focus {
+                    border-color: var(--accent);
+                    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+                }
+                .port-input.invalid {
+                    border-color: #ef4444;
+                    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+                }
+                .port-err {
+                    display: none;
+                    font-size: 12px;
+                    color: var(--danger-text);
+                    margin-top: -8px;
+                }
+                .port-err.show { display: block; }
+                .toggle-row {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 14px;
+                    cursor: pointer;
+                }
+                .toggle-text {
+                    font-size: 13px;
+                    line-height: 1.45;
+                    color: var(--text-secondary);
+                }
+                .switch {
+                    position: relative;
+                    width: 40px;
+                    height: 22px;
+                    flex-shrink: 0;
+                }
+                .switch input {
+                    opacity: 0;
+                    width: 0;
+                    height: 0;
+                }
+                .slider {
+                    position: absolute;
+                    inset: 0;
+                    background: rgba(255, 255, 255, 0.14);
+                    border-radius: 999px;
+                    transition: background 0.18s ease;
+                }
+                .slider::before {
+                    content: '';
+                    position: absolute;
+                    width: 16px;
+                    height: 16px;
+                    left: 3px;
+                    top: 3px;
+                    border-radius: 50%;
+                    background: #fff;
+                    transition: transform 0.18s ease;
+                }
+                .switch input:checked + .slider {
+                    background: var(--accent);
+                }
+                .switch input:checked + .slider::before {
+                    transform: translateX(18px);
+                }
+                .actions {
+                    margin-top: 24px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .btn {
+                    width: 100%;
+                    height: 44px;
+                    border: none;
+                    border-radius: 12px;
+                    background: var(--accent);
+                    color: #fff;
+                    font-size: 14.5px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                    transition: background 0.15s ease, transform 0.08s ease, opacity 0.15s ease;
+                }
+                .btn:hover:not(:disabled) { background: var(--accent-hover); }
+                .btn:active:not(:disabled) { transform: scale(0.992); }
+                .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+                .footer-hint {
+                    text-align: center;
+                    font-size: 12px;
+                    color: var(--text-muted);
+                }
+                </style></head><body>
+                <main class=""card"">
+                    <div class=""header"">
+                        <div class=""logo"">" + LogoSvg() + @"</div>
+                        <div>
+                            <h1 class=""title"">" + Html(title) + @"</h1>
+                            <div class=""subtitle"">" + Html(subtitle) + @"</div>
+                        </div>
+                    </div>
+                    " + errorHtml + @"
+                    <div class=""options"" role=""radiogroup"">
+                        <div class=""option" + (isAuto ? " selected" : "") + @""" id=""optAuto"" tabindex=""0"" role=""radio"" aria-checked=""" + (isAuto ? "true" : "false") + @""">
+                            <div class=""opt-head"">
+                                <div class=""radio""></div>
+                                <div class=""opt-title-row"">
+                                    <span class=""opt-title"">" + Html(autoTitle) + @"</span>
+                                    <span class=""badge"">" + Html(recommended) + @"</span>
+                                    <span class=""pill"">:3001</span>
+                                </div>
+                            </div>
+                            <div class=""opt-desc"">" + Html(autoDesc) + @"</div>
+                        </div>
+                        <div class=""option" + (!isAuto ? " selected" : "") + @""" id=""optCustom"" tabindex=""0"" role=""radio"" aria-checked=""" + (!isAuto ? "true" : "false") + @""">
+                            <div class=""opt-head"">
+                                <div class=""radio""></div>
+                                <div class=""opt-title-row"">
+                                    <span class=""opt-title"">" + Html(customTitle) + @"</span>
+                                </div>
+                            </div>
+                            <div class=""opt-desc"">" + Html(customDesc) + @"</div>
+                            <div class=""custom-fields"" id=""customFields"">
+                                <div class=""field-row"">
+                                    <div>
+                                        <div class=""field-label"">" + Html(portLabel) + @"</div>
+                                        <div class=""field-hint"">" + Html(portHint) + @"</div>
+                                    </div>
+                                    <input class=""port-input"" id=""portInput"" type=""number"" min=""1"" max=""65535"" value=""" + Port.ToString(CultureInfo.InvariantCulture) + @""" />
+                                </div>
+                                <div class=""port-err"" id=""portErr"">" + Html(portErrText) + @"</div>
+                                <label class=""toggle-row"" id=""startRow"">
+                                    <span class=""toggle-text"">" + Html(startLabel) + @"</span>
+                                    <span class=""switch"">
+                                        <input type=""checkbox"" id=""startCheck""" + (startWhenOffline ? " checked" : "") + @" />
+                                        <span class=""slider""></span>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class=""actions"">
+                        <button class=""btn"" id=""submitBtn"" type=""button"">
+                            <span id=""btnLabel"">" + Html(continueText) + @"</span>
+                            <svg width=""16"" height=""16"" viewBox=""0 0 24 24"" fill=""none"">
+                                <path d=""M5 12H19M13 6L19 12L13 18"" stroke=""currentColor"" stroke-width=""2"" stroke-linecap=""round"" stroke-linejoin=""round""/>
+                            </svg>
+                        </button>
+                        <div class=""footer-hint"">" + Html(footerHint) + @"</div>
+                    </div>
+                </main>
+                <script>
+                    var mode = '" + (isAuto ? "auto" : "custom") + @"';
+                    var submitting = false;
+                    var optAuto = document.getElementById('optAuto');
+                    var optCustom = document.getElementById('optCustom');
+                    var portInput = document.getElementById('portInput');
+                    var portErr = document.getElementById('portErr');
+                    var startCheck = document.getElementById('startCheck');
+                    var submitBtn = document.getElementById('submitBtn');
+                    var btnLabel = document.getElementById('btnLabel');
+
+                    function selectMode(next) {
+                        mode = next;
+                        var a = mode === 'auto';
+                        optAuto.classList.toggle('selected', a);
+                        optCustom.classList.toggle('selected', !a);
+                        optAuto.setAttribute('aria-checked', String(a));
+                        optCustom.setAttribute('aria-checked', String(!a));
+                        if (a) {
+                            portInput.classList.remove('invalid');
+                            portErr.classList.remove('show');
+                        }
+                    }
+
+                    function validatePort() {
+                        var raw = (portInput.value || '').trim();
+                        if (!/^\d+$/.test(raw)) return null;
+                        var n = Number(raw);
+                        if (!Number.isInteger(n) || n < 1 || n > 65535) return null;
+                        return n;
+                    }
+
+                    optAuto.addEventListener('click', function() { selectMode('auto'); });
+                    optCustom.addEventListener('click', function(e) {
+                        selectMode('custom');
+                        if (e.target === optCustom) portInput.focus();
+                    });
+                    optAuto.addEventListener('keydown', function(e) {
+                        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); selectMode('auto'); }
+                    });
+                    optCustom.addEventListener('keydown', function(e) {
+                        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); selectMode('custom'); }
+                    });
+                    document.getElementById('customFields').addEventListener('click', function(e) {
+                        e.stopPropagation();
+                    });
+                    portInput.addEventListener('input', function() {
+                        var valid = validatePort() !== null;
+                        portInput.classList.toggle('invalid', !valid);
+                        portErr.classList.toggle('show', !valid);
+                    });
+
+                    function submit() {
+                        if (submitting) return;
+                        var resolvedMode = mode === 'auto' ? 'auto' : (startCheck.checked ? 'existing' : 'connect');
+                        var resolvedPort = 3001;
+                        if (mode !== 'auto') {
+                            var p = validatePort();
+                            if (p === null) {
+                                portInput.classList.add('invalid');
+                                portErr.classList.add('show');
+                                portInput.focus();
+                                return;
+                            }
+                            resolvedPort = p;
+                        }
+                        submitting = true;
+                        submitBtn.disabled = true;
+                        btnLabel.textContent = '" + JsEscape(startingText) + @"';
+                        window.chrome.webview.postMessage('submit|' + resolvedMode + '|' + resolvedPort);
+                    }
+
+                    submitBtn.addEventListener('click', submit);
+                    document.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter' && document.activeElement !== optAuto && document.activeElement !== optCustom) {
+                            e.preventDefault();
+                            submit();
+                        }
+                    });
+                </script></body></html>";
         }
 
         async Task StartFromWindowAsync(bool configure)
         {
-            SetStatus(T("正在启动 CloudCLI…", "正在啟動 CloudCLI…", "Starting CloudCLI…"));
+            string initialText = T("正在启动 CloudCLI…", "正在啟動 CloudCLI…", "Starting CloudCLI…");
+            ShowLoading(initialText);
+            status.Text = initialText;
             await BootAsync(configure);
             if (!connected && !exiting) ShowSetup(status.Text);
         }
@@ -164,25 +847,160 @@ namespace CloudCLI
 
         WebView2 web;
         Label status;
-        const int TrayMenuCornerDiameter = 16;
-        const int TrayMenuSelectionInset = 4;
 
-        sealed class TrayMenuPopup : ContextMenuStrip
+        static class TrayWindowChrome
         {
-            protected override Padding DefaultPadding
+            [DllImport("dwmapi.dll")]
+            static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+            [DllImport("ntdll.dll")]
+            static extern int RtlGetVersion(ref OsVersionInfo version);
+
+            [StructLayout(LayoutKind.Sequential)]
+            struct OsVersionInfo
             {
-                get
+                public int Size;
+                public int MajorVersion;
+                public int MinorVersion;
+                public int BuildNumber;
+                public int PlatformId;
+                [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+                public string ServicePack;
+            }
+
+            const int DwmwaWindowCornerPreference = 33;
+            const int DwmwaBorderColor = 34;
+            const int DwmwcpRound = 2;
+            const int FirstWindows11Build = 22000;
+
+            public const int WsThickFrame = 0x00040000;
+            const int WmNcCalcSize = 0x0083;
+            const int WmNcHitTest = 0x0084;
+            const int WmGetMinMaxInfo = 0x0024;
+            const int HtClient = 1;
+            const int FirstResizeHitTest = 10;
+            const int LastResizeHitTest = 18;
+            const int MinTrackSizeOffset = 24;
+
+            public static readonly Color BorderColor = Color.FromArgb(218, 222, 228);
+            public static readonly bool SupportsModernChrome = DetectModernChrome();
+
+            static bool DetectModernChrome()
+            {
+                try
                 {
-                    Padding padding = base.DefaultPadding;
-                    int cornerRadius = ScalePixels(TrayMenuCornerDiameter, DeviceDpi) / 2;
-                    return new Padding(padding.Left, Math.Max(padding.Top, cornerRadius),
-                        padding.Right, Math.Max(padding.Bottom, cornerRadius));
+                    var v = new OsVersionInfo { Size = Marshal.SizeOf(typeof(OsVersionInfo)) };
+                    if (RtlGetVersion(ref v) != 0) return false;
+                    if (v.MajorVersion > 10) return true;
+                    return v.MajorVersion == 10 && v.BuildNumber >= FirstWindows11Build;
+                }
+                catch { return false; }
+            }
+
+            public static bool TryApplyModernChrome(IntPtr handle)
+            {
+                if (!SupportsModernChrome || SystemInformation.HighContrast) return false;
+                int pref = DwmwcpRound;
+                try
+                {
+                    if (DwmSetWindowAttribute(handle, DwmwaWindowCornerPreference, ref pref, sizeof(int)) != 0)
+                        return false;
+                    int colorRef = BorderColor.R | (BorderColor.G << 8) | (BorderColor.B << 16);
+                    DwmSetWindowAttribute(handle, DwmwaBorderColor, ref colorRef, sizeof(int));
+                    return true;
+                }
+                catch { return false; }
+            }
+
+            public static bool TrySuppressFrame(ref Message m)
+            {
+                if (!SupportsModernChrome || SystemInformation.HighContrast) return false;
+                if (m.Msg != WmNcCalcSize || m.WParam == IntPtr.Zero) return false;
+                m.Result = IntPtr.Zero;
+                return true;
+            }
+
+            public static void NormalizeFrameResults(ref Message m)
+            {
+                if (!SupportsModernChrome || SystemInformation.HighContrast) return;
+                if (m.Msg == WmGetMinMaxInfo)
+                {
+                    Marshal.WriteInt32(m.LParam, MinTrackSizeOffset, 1);
+                    Marshal.WriteInt32(m.LParam, MinTrackSizeOffset + 4, 1);
+                    return;
+                }
+                if (m.Msg == WmNcHitTest)
+                {
+                    int hit = m.Result.ToInt32();
+                    if (hit >= FirstResizeHitTest && hit <= LastResizeHitTest)
+                        m.Result = new IntPtr(HtClient);
                 }
             }
         }
 
+        sealed class TrayMenuPopup : ContextMenuStrip
+        {
+            public bool NativeChrome { get; private set; }
+
+            public TrayMenuPopup()
+            {
+                DropShadowEnabled = !TrayWindowChrome.SupportsModernChrome || SystemInformation.HighContrast;
+            }
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    CreateParams cp = base.CreateParams;
+                    if (TrayWindowChrome.SupportsModernChrome && !SystemInformation.HighContrast)
+                        cp.Style |= TrayWindowChrome.WsThickFrame;
+                    return cp;
+                }
+            }
+
+            protected override void OnHandleCreated(EventArgs e)
+            {
+                base.OnHandleCreated(e);
+                NativeChrome = TrayWindowChrome.TryApplyModernChrome(Handle);
+            }
+
+            protected override void WndProc(ref Message m)
+            {
+                if (TrayWindowChrome.TrySuppressFrame(ref m)) return;
+                base.WndProc(ref m);
+                TrayWindowChrome.NormalizeFrameResults(ref m);
+            }
+        }
+
+        sealed class TrayMenuItem : ToolStripMenuItem
+        {
+            public int TextLeftInset { get; set; }
+            public int TextRightInset { get; set; }
+
+            public TrayMenuItem(string text, EventHandler onClick) : base(text, null, onClick) { }
+        }
+
+        sealed class TrayMenuColorTable : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground { get { return Color.White; } }
+            public override Color ImageMarginGradientBegin { get { return Color.White; } }
+            public override Color ImageMarginGradientMiddle { get { return Color.White; } }
+            public override Color ImageMarginGradientEnd { get { return Color.White; } }
+            public override Color MenuBorder { get { return Color.Transparent; } }
+            public override Color MenuItemBorder { get { return Color.Transparent; } }
+            public override Color MenuItemSelected { get { return Color.FromArgb(243, 244, 246); } }
+        }
+
         sealed class TrayMenuRenderer : ToolStripProfessionalRenderer
         {
+            public TrayMenuRenderer() : base(new TrayMenuColorTable()) { RoundedEdges = false; }
+
+            static bool HasNativeChrome(ToolStrip strip)
+            {
+                var popup = strip as TrayMenuPopup;
+                return popup != null && popup.NativeChrome;
+            }
+
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
             {
                 if (SystemInformation.HighContrast)
@@ -190,14 +1008,29 @@ namespace CloudCLI
                     base.OnRenderToolStripBackground(e);
                     return;
                 }
-
-                using (var brush = new SolidBrush(Color.FromArgb(245, 245, 245)))
-                    e.Graphics.FillRectangle(brush, e.AffectedBounds);
+                if (HasNativeChrome(e.ToolStrip))
+                {
+                    e.Graphics.Clear(Color.White);
+                    return;
+                }
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var brush = new SolidBrush(Color.White))
+                using (var path = RoundedRectangle(new Rectangle(0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1), 12))
+                    e.Graphics.FillPath(brush, path);
             }
 
             protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
             {
-                if (SystemInformation.HighContrast) base.OnRenderToolStripBorder(e);
+                if (SystemInformation.HighContrast)
+                {
+                    base.OnRenderToolStripBorder(e);
+                    return;
+                }
+                if (HasNativeChrome(e.ToolStrip)) return;
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using (var pen = new Pen(TrayWindowChrome.BorderColor))
+                using (var path = RoundedRectangle(new Rectangle(0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1), 12))
+                    e.Graphics.DrawPath(pen, path);
             }
 
             protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
@@ -207,19 +1040,10 @@ namespace CloudCLI
                     base.OnRenderSeparator(e);
                     return;
                 }
-
-                int inset = ScalePixels(12, e.Graphics.DpiX);
+                int inset = ScalePixels(10, e.Graphics.DpiX);
                 int y = e.Item.Height / 2;
-                using (var pen = new Pen(Color.FromArgb(222, 222, 222)))
-                    e.Graphics.DrawLine(pen, inset, y, e.Item.Width - inset, y);
-            }
-
-            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
-            {
-                Rectangle text = e.TextRectangle;
-                text.Y = (e.Item.Height - text.Height) / 2;
-                e.TextRectangle = text;
-                base.OnRenderItemText(e);
+                using (var pen = new Pen(Color.FromArgb(234, 236, 239)))
+                    e.Graphics.DrawLine(pen, inset, y, Math.Max(inset, e.Item.Width - inset), y);
             }
 
             protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
@@ -230,21 +1054,84 @@ namespace CloudCLI
                     return;
                 }
                 if (!e.Item.Selected && !e.Item.Pressed) return;
-
-                var menu = e.ToolStrip;
-                float dpi = e.Graphics.DpiX;
-                int inset = ScalePixels(TrayMenuSelectionInset, dpi);
-                Rectangle item = e.Item.Bounds;
-                Rectangle inner = menu.ClientRectangle;
-                inner.Inflate(-inset, -inset);
-
-                Rectangle bounds = Rectangle.Intersect(item, inner);
-                bounds.Offset(-item.Left, -item.Top);
-                if (bounds.Width <= 0 || bounds.Height <= 0) return;
-
-                using (var brush = new SolidBrush(Color.FromArgb(218, 218, 218)))
-                    e.Graphics.FillRectangle(brush, bounds);
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                Color fill = e.Item.Pressed ? Color.FromArgb(230, 232, 236) : Color.FromArgb(242, 243, 245);
+                int padX = ScalePixels(5, e.Graphics.DpiX);
+                int padY = ScalePixels(2, e.Graphics.DpiY);
+                var rect = new Rectangle(padX, padY, Math.Max(1, e.Item.Width - padX * 2), Math.Max(1, e.Item.Height - padY * 2));
+                using (var brush = new SolidBrush(fill))
+                using (var path = RoundedRectangle(rect, ScalePixels(8, e.Graphics.DpiX)))
+                    e.Graphics.FillPath(brush, path);
             }
+
+            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+            {
+                if (SystemInformation.HighContrast)
+                {
+                    base.OnRenderItemText(e);
+                    return;
+                }
+                e.Graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+                Color textColor = e.Item.Enabled ? Color.FromArgb(31, 35, 40) : Color.FromArgb(156, 163, 175);
+                var item = e.Item as TrayMenuItem;
+                Rectangle rect = e.TextRectangle;
+                if (item != null)
+                {
+                    rect.X = item.TextLeftInset;
+                    rect.Width = Math.Max(1, e.Item.Width - item.TextLeftInset - item.TextRightInset);
+                }
+                rect.Y = 0;
+                rect.Height = e.Item.Height;
+                TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis;
+                if ((e.TextFormat & TextFormatFlags.RightToLeft) == TextFormatFlags.RightToLeft)
+                    flags |= TextFormatFlags.RightToLeft;
+                TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont, rect, textColor, flags);
+            }
+        }
+
+        TrayMenuItem CreateTrayMenuItem(string text, Font font, int menuWidth, EventHandler onClick)
+        {
+            int inset = ScalePixels(14, DeviceDpi);
+            int textHeight = TextRenderer.MeasureText(text, font).Height;
+            int itemHeight = Math.Max(ScalePixels(32, DeviceDpi), textHeight + ScalePixels(12, DeviceDpi));
+            return new TrayMenuItem(text, onClick)
+            {
+                AutoSize = false,
+                Margin = new Padding(0),
+                Size = new Size(menuWidth, itemHeight),
+                TextAlign = ContentAlignment.MiddleLeft,
+                TextLeftInset = inset,
+                TextRightInset = inset
+            };
+        }
+
+        int MeasureTrayMenuWidth(Font font, params string[] labels)
+        {
+            int maxText = 0;
+            foreach (string label in labels)
+                maxText = Math.Max(maxText, TextRenderer.MeasureText(label, font).Width);
+            return Math.Max(ScalePixels(140, DeviceDpi), maxText + ScalePixels(52, DeviceDpi));
+        }
+
+        void ApplyTrayMenuRegion()
+        {
+            if (trayMenu == null) return;
+            var popup = trayMenu as TrayMenuPopup;
+            if ((popup != null && popup.NativeChrome) || SystemInformation.HighContrast)
+            {
+                if (trayMenu.Region != null)
+                {
+                    Region old = trayMenu.Region;
+                    trayMenu.Region = null;
+                    old.Dispose();
+                }
+                return;
+            }
+            if (trayMenu.Width < 2 || trayMenu.Height < 2) return;
+            Region previous = trayMenu.Region;
+            using (var path = RoundedRectangle(new Rectangle(0, 0, trayMenu.Width, trayMenu.Height), 12))
+                trayMenu.Region = new Region(path);
+            if (previous != null) previous.Dispose();
         }
 
         static int ScalePixels(int value, float dpi)
@@ -307,7 +1194,7 @@ namespace CloudCLI
             KeyPreview = true;
             KeyDown += delegate (object sender, KeyEventArgs e)
             {
-                if (e.KeyCode == Keys.F5 && web != null && web.CoreWebView2 != null)
+                if (e.KeyCode == Keys.F5 && web != null && web.CoreWebView2 != null && !showingInternalPage)
                 {
                     web.CoreWebView2.Reload();
                     e.Handled = true;
@@ -318,30 +1205,31 @@ namespace CloudCLI
                     e.Handled = true;
                 }
             };
+            string menuFontName = Lang == 1 ? "Microsoft YaHei UI" : Lang == 2 ? "Microsoft JhengHei UI" : "Segoe UI";
+            var menuFont = new Font(menuFontName, 9f, FontStyle.Regular, GraphicsUnit.Point);
+            string openLabel = T("打开窗口", "開啟視窗", "Open window");
+            string exitLabel = T("退出", "結束", "Exit");
+            int menuWidth = MeasureTrayMenuWidth(menuFont, openLabel, exitLabel);
+            int menuPadY = ScalePixels(4, DeviceDpi);
+            int sepMarginY = ScalePixels(2, DeviceDpi);
+
             trayMenu = new TrayMenuPopup
             {
+                AutoSize = true,
+                BackColor = Color.White,
+                ForeColor = Color.FromArgb(31, 35, 40),
+                Font = menuFont,
+                Padding = new Padding(0, menuPadY, 0, menuPadY),
+                ShowCheckMargin = false,
                 ShowImageMargin = false,
-                DropShadowEnabled = true,
-                Renderer = new TrayMenuRenderer()
+                Renderer = new TrayMenuRenderer(),
+                MinimumSize = new Size(menuWidth, 0)
             };
-            trayMenu.Opened += delegate
-            {
-                Version windowsVersion = Environment.OSVersion.Version;
-                if (windowsVersion.Major < 10 || windowsVersion.Build < 22000 || SystemInformation.HighContrast)
-                {
-                    trayMenu.Region = null;
-                    return;
-                }
-
-                using (var graphics = trayMenu.CreateGraphics())
-                using (var path = RoundedRectangle(trayMenu.ClientRectangle, ScalePixels(TrayMenuCornerDiameter, graphics.DpiX)))
-                    trayMenu.Region = new Region(path);
-            };
-            trayMenu.Items.Add(T("打开窗口", "開啟視窗", "Open window"), null, delegate { OpenWindow(); });
-            trayMenu.Items.Add(new ToolStripSeparator());
-            trayMenu.Items.Add(T("退出", "結束", "Exit"), null, delegate { ExitLauncher(); });
-            foreach (ToolStripItem item in trayMenu.Items)
-                if (item is ToolStripMenuItem) item.Padding = new Padding(12, 5, 12, 5);
+            trayMenu.Items.Add(CreateTrayMenuItem(openLabel, menuFont, menuWidth, delegate { OpenWindow(); }));
+            trayMenu.Items.Add(new ToolStripSeparator { AutoSize = false, Size = new Size(menuWidth, ScalePixels(5, DeviceDpi)), Margin = new Padding(0, sepMarginY, 0, sepMarginY) });
+            trayMenu.Items.Add(CreateTrayMenuItem(exitLabel, menuFont, menuWidth, delegate { ExitLauncher(); }));
+            trayMenu.Opening += delegate { ApplyTrayMenuRegion(); };
+            trayMenu.SizeChanged += delegate { ApplyTrayMenuRegion(); };
             tray = new NotifyIcon { Icon = Icon ?? SystemIcons.Application, Text = "CloudCLI", ContextMenuStrip = trayMenu, Visible = true };
             tray.MouseClick += delegate (object sender, MouseEventArgs e)
             {
@@ -354,6 +1242,8 @@ namespace CloudCLI
             {
                 try { LoadSetup(); }
                 catch (IOException e) { Log("could not read setup: " + e.Message); }
+                bool ready = await EnsureWebViewAsync();
+                if (exiting || !ready) return;
                 if (setupMode == null) ShowSetup(null);
                 else await StartFromWindowAsync(false);
             };
@@ -546,65 +1436,11 @@ namespace CloudCLI
         async Task ShowPage()
         {
             SetStatus(T("正在加载 CloudCLI 页面…", "正在載入 CloudCLI 網頁…", "Loading CloudCLI…"));
-
-            string runtimeVersion = null;
-            try { runtimeVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
-            if (string.IsNullOrEmpty(runtimeVersion))
-            {
-                Log("webview2 runtime missing");
-                SetStatus(T("缺少 WebView2 Runtime，无法显示界面。", "缺少 WebView2 Runtime，無法顯示介面。", "Install the Microsoft Edge WebView2 Runtime to display CloudCLI."));
-                PromptInstallRuntime();
-                return;
-            }
-            Log("webview2 runtime: " + runtimeVersion);
-
-            try
-            {
-                string profile = Path.Combine(AppDir, "data", "webview2");
-                string legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CloudCLI", "webview2");
-                try
-                {
-                    if (!Directory.Exists(profile) && Directory.Exists(legacy))
-                    {
-                        Log("migrating webview2 data from " + legacy);
-                        CopyDir(legacy, profile);
-                    }
-                }
-                catch (Exception ex) { Log("migrate failed: " + ex.Message); }
-                Directory.CreateDirectory(profile);
-
-                web = new WebView2();
-                web.Dock = DockStyle.Fill;
-                web.CreationProperties = new CoreWebView2CreationProperties { UserDataFolder = profile };
-                Controls.Add(web);
-                web.BringToFront();
-
-                await web.EnsureCoreWebView2Async(null);
-                if (exiting) return;
-                web.CoreWebView2.Settings.AreDevToolsEnabled = true;
-                web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-                web.CoreWebView2.NewWindowRequested += delegate (object s, CoreWebView2NewWindowRequestedEventArgs e)
-                {
-                    e.Handled = true;
-                    try { Process.Start(e.Uri); } catch { }
-                };
-                web.CoreWebView2.NavigationCompleted += delegate (object s2, CoreWebView2NavigationCompletedEventArgs ev)
-                {
-                    if (ev.IsSuccess) Log("navigation completed successfully");
-                    else Log("navigation failed: " + ev.WebErrorStatus);
-                };
-                web.CoreWebView2.Navigate(Url);
-                Log("navigated");
-                status.Visible = false;
-            }
-            catch (Exception e)
-            {
-                if (exiting) return;
-                Log("webview failed: " + e);
-                SetStatus(T("WebView2 初始化失败：", "WebView2 初始化失敗：", "Could not initialize WebView2: ") + e.Message);
-                PromptInstallRuntime();
-            }
+            if (!await EnsureWebViewAsync() || exiting) return;
+            showingInternalPage = false;
+            web.CoreWebView2.Navigate(Url);
+            Log("navigated");
+            status.Visible = false;
         }
 
         static string RuntimePromptText()
@@ -628,8 +1464,20 @@ namespace CloudCLI
         {
             try
             {
-                if (InvokeRequired) { BeginInvoke(new Action(delegate { status.Text = text; })); }
-                else { status.Text = text; status.Visible = true; }
+                Action apply = delegate
+                {
+                    status.Text = text;
+                    if (webReady && showingInternalPage && web != null && web.CoreWebView2 != null)
+                    {
+                        web.CoreWebView2.ExecuteScriptAsync("window.__setStatus && window.__setStatus('" + JsEscape(text) + "');");
+                    }
+                    else
+                    {
+                        status.Visible = true;
+                    }
+                };
+                if (InvokeRequired) BeginInvoke(apply);
+                else apply();
             }
             catch { }
         }

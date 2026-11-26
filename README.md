@@ -1,4 +1,4 @@
-# CloudCLI Desktop Launcher for WSL 1.4.0
+# CloudCLI Desktop Launcher for WSL 2.0.0
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
@@ -18,7 +18,7 @@ Run CloudCLI in WSL and open its web interface in a Windows desktop window. This
    ```
 
    Open `http://localhost:3001/` in a Windows browser to check that the CloudCLI page loads. Press `Ctrl+C` in the WSL terminal to stop the test instance before trying automatic startup.
-3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-1.4.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v1.4.0/CloudCLI-Setup-1.4.0.exe). On the final installer page, select **Run CloudCLI** to open it immediately. The checkbox is cleared by default.
+3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-2.0.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.0.0/CloudCLI-Setup-2.0.0.exe). On the final installer page, select **Run CloudCLI** to open it immediately. The checkbox is cleared by default.
 4. Open CloudCLI. Choose **Set it up for me** to reuse CloudCLI on port 3001 or install it in the launcher's data directory if needed. Choose **Customize or use an existing setup** to set a local port. To connect to a service you manage yourself, clear the option to start it when offline. The launcher remembers your choice after a successful connection.
 
 Press `F5` to reload or `Ctrl+I` to open developer tools. Links requesting a new window open through Windows. The launcher follows the Windows display language. Set `CLOUDCLI_LANG` to `en`, `zh-CN`, or `zh-TW` to override it.
@@ -53,7 +53,7 @@ From the project root in WSL, use Bash with a .NET SDK and NSIS on your PATH. Th
 )
 ```
 
-The installer is written to `dist/CloudCLI-Setup-1.4.0.exe`.
+The installer is written to `dist/CloudCLI-Setup-2.0.0.exe`.
 
 ## License
 

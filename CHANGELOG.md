@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.0 · 2026-11-26
+
+First stable release of CloudCLI Desktop Launcher for WSL.
+
+- Redesigned the first-run setup screen and startup loading screen inside WebView2 with a dark card layout, inline port validation, error banner, and loading spinner, reusing a single WebView2 instance through to the CloudCLI page.
+- Upgraded the system tray menu on Windows 11 to use native DWM rounded corners, subtle border, soft system shadow, compact Fluent-proportioned items, and ClearType text rendering, with automatic fallback on Windows 10 and high-contrast themes.
+
 ## 1.4.0 · 2026-11-24
 
 - Choose automatic setup or connect to an existing deployment from the main window on first launch. Custom setup supports a local port and an option to connect only. Successful settings carry over to the next launch.

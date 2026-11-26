@@ -1,4 +1,4 @@
-# CloudCLI Desktop Launcher for WSL 1.4.0
+# CloudCLI Desktop Launcher for WSL 2.0.0
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
@@ -18,7 +18,7 @@
    ```
 
    在 Windows 上用浏览器打开 `http://localhost:3001/`，确认页面能加载。然后在 WSL 终端按 `Ctrl+C` 停止测试服务。下次打开桌面窗口时，启动器会自动启动服务。
-3. 在 Windows 安装 Microsoft Edge WebView2 Runtime，然后下载并运行 [CloudCLI-Setup-1.4.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v1.4.0/CloudCLI-Setup-1.4.0.exe)。如需立即启动，可在安装完成页勾选“运行 CloudCLI”，默认不勾选。
+3. 在 Windows 安装 Microsoft Edge WebView2 Runtime，然后下载并运行 [CloudCLI-Setup-2.0.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.0.0/CloudCLI-Setup-2.0.0.exe)。如需立即启动，可在安装完成页勾选“运行 CloudCLI”，默认不勾选。
 4. 打开 CloudCLI。选“帮我配置并启动”会优先复用已有的 CloudCLI，缺少时才安装到启动器自己的数据目录，默认端口为 3001。选“自定义或使用已有部署”可指定本机端口。如果服务由你自己管理，取消勾选服务未运行时自动启动的选项即可。连接成功后会记住设置。
 
 窗口语言默认跟随 Windows 显示语言，也可以在启动前设置 `CLOUDCLI_LANG` 为 `zh-CN`、`zh-TW` 或 `en`。在窗口中可用 `F5` 刷新，或用 `Ctrl+I` 打开开发者工具。网页请求打开新窗口时，启动器会把链接交给 Windows。
