@@ -1,4 +1,4 @@
-# CloudCLI Desktop Launcher for WSL 2.0.0
+# CloudCLI Desktop Launcher for WSL 2.1.0
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
@@ -18,8 +18,8 @@
    ```
 
    在 Windows 上用浏览器打开 `http://localhost:3001/`，确认页面能加载。然后在 WSL 终端按 `Ctrl+C` 停止测试服务。下次打开桌面窗口时，启动器会自动启动服务。
-3. 在 Windows 安装 Microsoft Edge WebView2 Runtime，然后下载并运行 [CloudCLI-Setup-2.0.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.0.0/CloudCLI-Setup-2.0.0.exe)。如需立即启动，可在安装完成页勾选“运行 CloudCLI”，默认不勾选。
-4. 打开 CloudCLI。选“帮我配置并启动”会在界面实时展示部署进度，自动检查并准备 WSL（缺少时引导安装 WSL）、按需安装独立版 Node.js 22+ 运行时以及 CloudCLI（默认端口 3001）。选“自定义或使用已有部署”可指定本机端口。如果服务由你自己管理，取消勾选服务未运行时自动启动的选项即可。连接成功后会记住设置。
+3. 在 Windows 安装 Microsoft Edge WebView2 Runtime，然后下载并运行 [CloudCLI-Setup-2.1.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.1.0/CloudCLI-Setup-2.1.0.exe)。如需立即启动，可在安装完成页勾选“运行 CloudCLI”，默认不勾选。
+4. 打开 CloudCLI。选“帮我配置并启动”会在界面通过实时进度条完成后台静默安装 WSL、应用内创建 Linux 用户，并将独立版 Node.js 22 LTS 与 CloudCLI 安装至 WSL 原生 ext4 目录（默认端口 3001）。选“自定义或使用已有部署”可指定本机端口，存在多个开发用发行版时支持选择具体 WSL 发行版（自动过滤 Docker/Rancher/Podman 等容器发行版），并支持从 `PATH` 及主流版本管理器（`nvm`、`fnm`、`volta`、`asdf`、`mise`、`nodenv`、`pnpm`、`proto`、`n`、Linuxbrew、Nix 与登录 shell 兜底）检测 Node.js 22+。如果服务由你自己管理，取消勾选服务未运行时自动启动的选项即可。连接成功后会记住设置。
 
 > **AI 编程 CLI 部署**：CloudCLI 本身只是服务端与界面框架。如需在其中使用 **Claude Code**、**Codex CLI**、**Gemini CLI** 等智能体，请在 WSL 发行版内安装并登录对应 CLI，详见独立文档 [WSL 中部署 AI 编程 CLI 指南](docs/agent-clis.zh-CN.md)。
 

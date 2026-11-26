@@ -1,4 +1,4 @@
-# CloudCLI Desktop Launcher for WSL 2.0.0
+# CloudCLI Desktop Launcher for WSL 2.1.0
 
 [English](README.md) · [简体中文](readme_zh-CN.md) · [繁體中文](readme_zh-TW.md)
 
@@ -18,8 +18,8 @@ Run CloudCLI in WSL and open its web interface in a Windows desktop window. This
    ```
 
    Open `http://localhost:3001/` in a Windows browser to check that the CloudCLI page loads. Press `Ctrl+C` in the WSL terminal to stop the test instance before trying automatic startup.
-3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-2.0.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.0.0/CloudCLI-Setup-2.0.0.exe). On the final installer page, select **Run CloudCLI** to open it immediately. The checkbox is cleared by default.
-4. Open CloudCLI. Choose **Set it up for me** to show live deployment progress while automatically checking and preparing WSL (guiding `wsl --install` if WSL is missing), an isolated Node.js 22+ runtime if needed, and CloudCLI on port 3001. Choose **Customize or use an existing setup** to set a local port. To connect to a service you manage yourself, clear the option to start it when offline. The launcher remembers your choice after a successful connection.
+3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-2.1.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.1.0/CloudCLI-Setup-2.1.0.exe). On the final installer page, select **Run CloudCLI** to open it immediately. The checkbox is cleared by default.
+4. Open CloudCLI. Choose **Set it up for me** for silent background WSL installation, in-app Linux user creation, and isolated Node.js 22 LTS & CloudCLI setup on native WSL ext4 with live progress bars on port 3001. Choose **Customize or use an existing setup** to set a local port, pick a WSL distribution when multiple developer distributions exist (Docker/Rancher/Podman container distros are filtered automatically), and auto-detect Node.js 22+ across `PATH` and major version managers (`nvm`, `fnm`, `volta`, `asdf`, `mise`, `nodenv`, `pnpm`, `proto`, `n`, Linuxbrew, Nix, plus login shell fallback). To connect to a service you manage yourself, clear the option to start it when offline. The launcher remembers your choice after a successful connection.
 
 > **AI Coding CLIs**: CloudCLI is the server and web UI framework. To use **Claude Code**, **OpenAI Codex CLI**, **Gemini CLI**, or other supported terminal agents inside CloudCLI, install and sign in to them inside your WSL distribution. See the standalone [AI Coding CLI Deployment Guide](docs/agent-clis.md).
 
@@ -55,7 +55,7 @@ From the project root in WSL, use Bash with a .NET SDK and NSIS on your PATH. Th
 )
 ```
 
-The installer is written to `dist/CloudCLI-Setup-2.0.0.exe`.
+The installer is written to `dist/CloudCLI-Setup-2.1.0.exe`.
 
 ## License
 

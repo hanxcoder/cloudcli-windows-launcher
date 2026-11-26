@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.1.0 · 2026-11-27
+
+Major update bringing zero-to-one automatic WSL/Node.js/CloudCLI onboarding, live deployment progress, multi-distro support, and expanded Node.js version manager detection.
+
+- **End-to-end automatic setup (Option 1)**: Automatically installs WSL (`wsl --install -d Ubuntu --no-launch`) silently in the background with live log streaming, guides first-time Linux username/password creation inside an in-app WebView2 page (never popping up external consoles), downloads and verifies an isolated Node.js 22 LTS runtime, and installs `@cloudcli-ai/cloudcli` onto WSL native ext4 storage (`~/.local/share/cloudcli-launcher/`) for fast installation and startup.
+- **Live deployment progress UI**: Replaced the static spinner with a 4-step live checklist featuring per-step progress bars (real MB / percentage for Node.js downloads, live progress parsing for WSL installation, indeterminate bar for npm install) and an elapsed `MM:SS` timer. Local port probing stays silent unless an error occurs.
+- **Multi-WSL distribution support**: Filters out container-engine distributions (`docker-desktop`, `docker-desktop-data`, `rancher-desktop`, `rancher-desktop-data`, `podman-machine-*`) so developer distributions are never shadowed, and adds a WSL distribution selector in **Customize or use an existing setup** when two or more distributions are detected (persisted in `data/setup.txt` with backward compatibility).
+- **4-tier Node.js 22+ & CloudCLI detection**: Checks system `PATH`, expanded version manager and package paths (`nvm`, `fnm`, `volta`, `asdf`, `mise`, `nodenv`, `pnpm`, `proto`, `n`, Linuxbrew, Nix, plus manager global/shim `cloudcli` binaries), a 6-second login interactive shell fallback (`"$SHELL" -lic`), and the launcher-managed isolated runtime.
+- **Reliability & docs**: Fixed UTF-16LE/BOM decoding for `wsl.exe` output on localized Windows systems, separated install (600s) and server boot (120s) timeouts, and added trilingual [AI Coding CLI deployment guides](docs/agent-clis.md) (`en`, `zh-CN`, `zh-TW`).
+
 ## 2.0.0 · 2026-11-26
 
 First stable release of CloudCLI Desktop Launcher for WSL.

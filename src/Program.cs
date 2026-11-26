@@ -17,8 +17,8 @@ using System.Runtime.InteropServices;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.1.0.0")]
 
 namespace CloudCLI
 {
@@ -2245,7 +2245,7 @@ namespace CloudCLI
                     {
                         setInstallingCli(true);
                         setActiveStep(2);
-                        UpdateStep(2, "active", T("正在通过 npm 安装 CloudCLI 到 WSL 独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到 WSL 獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into WSL isolated folder (may take 1–2 minutes)…"));
+                        UpdateStep(2, "active", T("正在通过 npm 安装 CloudCLI 到 WSL 独立目录（首次可能需要 3–5 分钟）…", "正在透過 npm 安裝 CloudCLI 到 WSL 獨立目錄（首次可能需要 3–5 分鐘）…", "Installing CloudCLI via npm into WSL isolated folder (may take 3–5 minutes)…"));
                         UpdateStepProgress(2, -2);
                     }
                     else if (line == "PROGRESS:verifying_cli")
