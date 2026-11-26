@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const [mode, port] = process.argv.slice(2);
+const [mode, port, hintCli] = process.argv.slice(2);
 const root = __dirname;
 const home = os.homedir();
 const runtime = path.join(home, ".local", "share", "cloudcli-launcher");
@@ -27,12 +27,34 @@ process.stdin.on("error", stop);
 process.on("SIGTERM", stop);
 process.stdin.resume();
 
+function isExecutable(file) {
+    if (!file) return false;
+    try { fs.accessSync(file, fs.constants.X_OK); return true; }
+    catch { return false; }
+}
+
 function findExecutable(name) {
     for (const dir of env.PATH.split(":")) {
         if (!path.isAbsolute(dir)) continue;
         const file = path.join(dir, name);
-        try { fs.accessSync(file, fs.constants.X_OK); return file; }
-        catch { /* Continue searching PATH. */ }
+        if (isExecutable(file)) return file;
+    }
+}
+
+function findManagerCli() {
+    const candidates = [
+        path.join(home, ".volta", "bin", "cloudcli"),
+        path.join(home, ".local", "share", "pnpm", "cloudcli"),
+        path.join(home, ".asdf", "shims", "cloudcli"),
+        path.join(home, ".local", "share", "mise", "shims", "cloudcli"),
+        path.join(home, ".proto", "shims", "cloudcli"),
+        path.join(home, ".proto", "bin", "cloudcli"),
+        path.join(home, ".npm-global", "bin", "cloudcli"),
+        path.join(home, ".nix-profile", "bin", "cloudcli"),
+        "/home/linuxbrew/.linuxbrew/bin/cloudcli"
+    ];
+    for (const file of candidates) {
+        if (isExecutable(file)) return file;
     }
 }
 
@@ -56,8 +78,14 @@ async function main() {
     const managed = path.join(runtime, "package", "bin", "cloudcli");
     const legacyManaged = path.join(legacyRuntime, "package", "bin", "cloudcli");
     let cli = findExecutable("cloudcli");
+    if (!cli && hintCli && path.isAbsolute(hintCli) && isExecutable(hintCli)) cli = hintCli;
+    if (!cli) cli = findManagerCli();
     if (!cli && fs.existsSync(managed)) cli = managed;
     if (!cli && fs.existsSync(legacyManaged)) cli = legacyManaged;
+    if (cli) {
+        const cliDir = path.dirname(cli);
+        if (!env.PATH.split(":").includes(cliDir)) env.PATH = env.PATH + ":" + cliDir;
+    }
     if (!cli) {
         if (mode !== "auto") return 77;
         const npm = findExecutable("npm");

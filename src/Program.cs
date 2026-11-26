@@ -82,6 +82,7 @@ namespace CloudCLI
         int Port = 3001;
         string Url { get { return "http://localhost:" + Port.ToString(CultureInfo.InvariantCulture); } }
         string setupMode;
+        string setupDistro;
         string SetupFile { get { return Path.Combine(AppDir, "data", "setup.txt"); } }
 
         void LoadSetup()
@@ -89,17 +90,31 @@ namespace CloudCLI
             if (!File.Exists(SetupFile)) return;
             var lines = File.ReadAllLines(SetupFile);
             int port;
-            if (lines.Length != 2 || !int.TryParse(lines[1], out port) || port < 1 || port > 65535) return;
+            if ((lines.Length != 2 && lines.Length != 3) || !int.TryParse(lines[1], out port) || port < 1 || port > 65535) return;
             if (lines[0] != "auto" && lines[0] != "existing" && lines[0] != "connect") return;
+            string distro = null;
+            if (lines.Length == 3)
+            {
+                string d = lines[2].Trim();
+                if (d.Length > 0)
+                {
+                    if (!IsValidDistroName(d)) return;
+                    if (lines[0] == "existing") distro = d;
+                }
+            }
             setupMode = lines[0];
             Port = port;
+            setupDistro = distro;
         }
 
         void SaveSetup()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SetupFile));
             string temp = SetupFile + ".tmp";
-            File.WriteAllLines(temp, new[] { setupMode, Port.ToString(CultureInfo.InvariantCulture) });
+            string[] payload = (setupMode == "existing" && !string.IsNullOrEmpty(setupDistro))
+                ? new[] { setupMode, Port.ToString(CultureInfo.InvariantCulture), setupDistro }
+                : new[] { setupMode, Port.ToString(CultureInfo.InvariantCulture) };
+            File.WriteAllLines(temp, payload);
             if (File.Exists(SetupFile)) File.Replace(temp, SetupFile, null);
             else File.Move(temp, SetupFile);
         }
@@ -225,14 +240,17 @@ namespace CloudCLI
             if (setupSubmitting) return;
 
             string[] parts = message.Split('|');
-            if (parts.Length != 3 || parts[0] != "submit") return;
+            if ((parts.Length != 3 && parts.Length != 4) || parts[0] != "submit") return;
             string mode = parts[1];
             int chosenPort;
             if (mode != "auto" && mode != "existing" && mode != "connect") return;
             if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out chosenPort) || chosenPort < 1 || chosenPort > 65535) return;
+            string chosenDistro = parts.Length == 4 ? parts[3].Trim() : "";
+            if (chosenDistro.Length > 0 && !IsValidDistroName(chosenDistro)) return;
 
             setupSubmitting = true;
             setupMode = mode;
+            setupDistro = (mode == "existing" && chosenDistro.Length > 0) ? chosenDistro : null;
             Port = mode == "auto" ? 3001 : chosenPort;
             try
             {
@@ -244,7 +262,14 @@ namespace CloudCLI
             }
         }
 
-        void ShowSetup(string error)
+        async Task ShowSetupAsync(string error)
+        {
+            var distros = await Task.Run(delegate { return ListDistros(5000); });
+            if (exiting) return;
+            ShowSetup(error, distros);
+        }
+
+        void ShowSetup(string error, System.Collections.Generic.IList<string> distros = null)
         {
             if (!webReady || web == null || web.CoreWebView2 == null)
             {
@@ -256,7 +281,7 @@ namespace CloudCLI
             status.Visible = false;
             web.Visible = true;
             web.BringToFront();
-            web.CoreWebView2.NavigateToString(BuildSetupHtml(error));
+            web.CoreWebView2.NavigateToString(BuildSetupHtml(error, distros));
             web.Focus();
         }
 
@@ -959,7 +984,7 @@ namespace CloudCLI
                 </script></body></html>";
         }
 
-        string BuildSetupHtml(string error)
+        string BuildSetupHtml(string error, System.Collections.Generic.IList<string> distros = null)
         {
             bool isAuto = setupMode == null || setupMode == "auto";
             bool startWhenOffline = setupMode != "connect";
@@ -982,6 +1007,8 @@ namespace CloudCLI
             string portLabel = T("本机端口", "本機連接埠", "Local port");
             string portHint = T("范围 1 – 65535", "範圍 1 – 65535", "Range 1 – 65535");
             string portErrText = T("请输入 1 到 65535 之间的有效端口号", "請輸入 1 到 65535 之間的有效連接埠號碼", "Enter a valid port number between 1 and 65535");
+            string distroLabel = T("WSL 发行版", "WSL 發行版", "WSL distribution");
+            string distroHint = T("检测到多个发行版，可指定运行环境", "偵測到多個發行版，可指定執行環境", "Multiple distributions found; choose one");
             string startLabel = T(
                 "服务未运行时，自动启动 WSL 中已安装的 CloudCLI",
                 "服務未執行時，自動啟動 WSL 裡已安裝的 CloudCLI",
@@ -992,6 +1019,29 @@ namespace CloudCLI
                 "首次连接成功后会自动记住你的选择",
                 "首次連線成功後會自動記住你的選擇",
                 "Your choice will be saved after a successful connection");
+
+            string distroRowHtml = "";
+            if (distros != null && (distros.Count >= 2 || (!string.IsNullOrEmpty(setupDistro) && distros.Count >= 1)))
+            {
+                var opts = new StringBuilder();
+                string defaultText = string.Format(T("默认（{0}）", "預設（{0}）", "Default ({0})"), distros[0]);
+                opts.Append("<option value=\"\">").Append(Html(defaultText)).Append("</option>");
+                foreach (string d in distros)
+                {
+                    bool sel = !string.IsNullOrEmpty(setupDistro) && string.Equals(d, setupDistro, StringComparison.OrdinalIgnoreCase);
+                    opts.Append("<option value=\"").Append(Html(d)).Append("\"")
+                        .Append(sel ? " selected" : "").Append(">")
+                        .Append(Html(d)).Append("</option>");
+                }
+                distroRowHtml = @"
+                                <div class=""field-row"" id=""distroRow"">
+                                    <div>
+                                        <div class=""field-label"">" + Html(distroLabel) + @"</div>
+                                        <div class=""field-hint"">" + Html(distroHint) + @"</div>
+                                    </div>
+                                    <select class=""distro-select"" id=""distroSelect"">" + opts.ToString() + @"</select>
+                                </div>";
+            }
 
             string errorHtml = "";
             if (!string.IsNullOrEmpty(error))
@@ -1211,6 +1261,28 @@ namespace CloudCLI
                     margin-top: -8px;
                 }
                 .port-err.show { display: block; }
+                .field-row.disabled { opacity: 0.45; }
+                .distro-select {
+                    min-width: 150px;
+                    max-width: 210px;
+                    height: 36px;
+                    padding: 0 10px;
+                    border-radius: 9px;
+                    border: 1px solid var(--border-strong);
+                    background: #0d0e12;
+                    color: var(--text);
+                    font-size: 13px;
+                    outline: none;
+                    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+                }
+                .distro-select:focus {
+                    border-color: var(--accent);
+                    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+                }
+                .distro-select option {
+                    background: #15161a;
+                    color: #f3f4f6;
+                }
                 .toggle-row {
                     display: flex;
                     align-items: center;
@@ -1326,7 +1398,7 @@ namespace CloudCLI
                                     </div>
                                     <input class=""port-input"" id=""portInput"" type=""number"" min=""1"" max=""65535"" value=""" + Port.ToString(CultureInfo.InvariantCulture) + @""" />
                                 </div>
-                                <div class=""port-err"" id=""portErr"">" + Html(portErrText) + @"</div>
+                                <div class=""port-err"" id=""portErr"">" + Html(portErrText) + @"</div>" + distroRowHtml + @"
                                 <label class=""toggle-row"" id=""startRow"">
                                     <span class=""toggle-text"">" + Html(startLabel) + @"</span>
                                     <span class=""switch"">
@@ -1355,8 +1427,17 @@ namespace CloudCLI
                     var portInput = document.getElementById('portInput');
                     var portErr = document.getElementById('portErr');
                     var startCheck = document.getElementById('startCheck');
+                    var distroSelect = document.getElementById('distroSelect');
+                    var distroRow = document.getElementById('distroRow');
                     var submitBtn = document.getElementById('submitBtn');
                     var btnLabel = document.getElementById('btnLabel');
+
+                    function syncDistroState() {
+                        if (!distroSelect || !distroRow) return;
+                        var en = !!startCheck.checked;
+                        distroSelect.disabled = !en;
+                        distroRow.classList.toggle('disabled', !en);
+                    }
 
                     function selectMode(next) {
                         mode = next;
@@ -1398,6 +1479,8 @@ namespace CloudCLI
                         portInput.classList.toggle('invalid', !valid);
                         portErr.classList.toggle('show', !valid);
                     });
+                    startCheck.addEventListener('change', syncDistroState);
+                    syncDistroState();
 
                     function submit() {
                         if (submitting) return;
@@ -1413,10 +1496,11 @@ namespace CloudCLI
                             }
                             resolvedPort = p;
                         }
+                        var resolvedDistro = (resolvedMode === 'existing' && distroSelect) ? (distroSelect.value || '') : '';
                         submitting = true;
                         submitBtn.disabled = true;
                         btnLabel.textContent = '" + JsEscape(startingText) + @"';
-                        window.chrome.webview.postMessage('submit|' + resolvedMode + '|' + resolvedPort);
+                        window.chrome.webview.postMessage('submit|' + resolvedMode + '|' + resolvedPort + '|' + resolvedDistro);
                     }
 
                     submitBtn.addEventListener('click', submit);
@@ -1436,7 +1520,7 @@ namespace CloudCLI
             ShowProgress("");
             status.Text = initialText;
             await BootAsync(configure);
-            if (!connected && !exiting) ShowSetup(status.Text);
+            if (!connected && !exiting) await ShowSetupAsync(status.Text);
         }
 
         enum PortState { Available, CloudCli, Occupied, Unreachable }
@@ -1842,7 +1926,7 @@ namespace CloudCLI
                 catch (IOException e) { Log("could not read setup: " + e.Message); }
                 bool ready = await EnsureWebViewAsync();
                 if (exiting || !ready) return;
-                if (setupMode == null) ShowSetup(null);
+                if (setupMode == null) await ShowSetupAsync(null);
                 else await StartFromWindowAsync(false);
             };
         }
@@ -1962,8 +2046,31 @@ namespace CloudCLI
         {
             setActiveStep(0);
             UpdateStep(0, "active", T("正在检测已安装的 WSL 发行版…", "正在偵測已安裝的 WSL 發行版…", "Detecting WSL distribution…"));
-            string distro = await Task.Run(delegate { return DetectDistro(); });
+            var distros = await Task.Run(delegate { return ListDistros(); });
             if (exiting) return;
+            string distro = null;
+            if (setupMode == "existing" && !string.IsNullOrEmpty(setupDistro))
+            {
+                foreach (string d in distros)
+                {
+                    if (string.Equals(d, setupDistro, StringComparison.OrdinalIgnoreCase))
+                    {
+                        distro = d;
+                        break;
+                    }
+                }
+                if (distro == null)
+                {
+                    throw new InvalidOperationException(string.Format(T(
+                        "未找到你选择的 WSL 发行版“{0}”。请重新选择一个可用发行版，或确认该发行版已安装。",
+                        "找不到你選擇的 WSL 發行版「{0}」。請重新選擇可用的發行版，或確認該發行版已安裝。",
+                        "The selected WSL distribution \"{0}\" was not found. Choose an available distribution or check that it is installed."), setupDistro));
+                }
+            }
+            else
+            {
+                distro = distros.Count > 0 ? distros[0] : null;
+            }
             if (distro == null)
             {
                 if (setupMode == "auto")
@@ -2009,7 +2116,14 @@ namespace CloudCLI
             setActiveStep(1);
             UpdateStep(1, "active", T("正在检查 WSL 中的 Node.js 22+ 与 npm…", "正在檢查 WSL 中的 Node.js 22+ 與 npm…", "Checking Node.js 22+ and npm in WSL…"));
             var discovery = Stopwatch.StartNew();
-            string node = await Task.Run(delegate { return FindNode(distro, setupMode == "auto"); });
+            string cloudCliPath = null;
+            string node = await Task.Run(delegate
+            {
+                string detectedCli;
+                string foundNode = FindNode(distro, setupMode == "auto", out detectedCli);
+                cloudCliPath = detectedCli;
+                return foundNode;
+            });
             if (exiting) return;
             if (node == null)
             {
@@ -2017,6 +2131,7 @@ namespace CloudCLI
                 if (exiting) return;
             }
             Log("Selected Node.js after " + discovery.ElapsedMilliseconds + " ms: " + node);
+            if (!string.IsNullOrEmpty(cloudCliPath)) Log("Detected CloudCLI path: " + cloudCliPath);
             UpdateStep(1, "done", node == "node"
                 ? T("已就绪（系统 PATH 中的 Node.js）", "已就緒（系統 PATH 中的 Node.js）", "Ready (Node.js on PATH)")
                 : string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), node));
@@ -2027,8 +2142,10 @@ namespace CloudCLI
 
             setActiveStep(2);
             UpdateStep(2, "active", T("正在检查 WSL 中的 CloudCLI…", "正在檢查 WSL 中的 CloudCLI…", "Checking CloudCLI in WSL…"));
-            var processInfo = new ProcessStartInfo("wsl.exe", DistroArgument(distro)
-                + " --exec " + QuoteArgument(node) + " ./launcher-service.cjs " + setupMode + " " + Port)
+            string launcherArgs = DistroArgument(distro)
+                + " --exec " + QuoteArgument(node) + " ./launcher-service.cjs " + setupMode + " " + Port
+                + (!string.IsNullOrEmpty(cloudCliPath) ? " " + QuoteArgument(cloudCliPath) : "");
+            var processInfo = new ProcessStartInfo("wsl.exe", launcherArgs)
             {
                 WorkingDirectory = AppDir,
                 UseShellExecute = false,
@@ -2695,15 +2812,34 @@ namespace CloudCLI
             return true;
         }
 
-        static string DetectDistro()
+        static bool IsSystemContainerDistro(string name)
         {
-            string raw = CaptureWsl("-l -q").Replace("\uFEFF", "").Replace("\0", "").Trim();
+            if (string.IsNullOrEmpty(name)) return true;
+            return string.Equals(name, "docker-desktop", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "docker-desktop-data", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "rancher-desktop", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, "rancher-desktop-data", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("podman-machine-", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static System.Collections.Generic.List<string> ListDistros(int timeoutMs = 20000)
+        {
+            var result = new System.Collections.Generic.List<string>();
+            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string raw = CaptureWsl("-l -q", null, timeoutMs).Replace("\uFEFF", "").Replace("\0", "").Trim();
             foreach (string line in raw.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 string t = line.Trim();
-                if (IsValidDistroName(t)) return t;
+                if (IsValidDistroName(t) && !IsSystemContainerDistro(t) && seen.Add(t))
+                    result.Add(t);
             }
-            return null;
+            return result;
+        }
+
+        static string DetectDistro()
+        {
+            var distros = ListDistros();
+            return distros.Count > 0 ? distros[0] : null;
         }
 
         static string QuoteArgument(string value)
@@ -2713,60 +2849,183 @@ namespace CloudCLI
             return value.Contains(" ") ? "\"" + value + "\"" : value;
         }
 
-        static string FindNode(string distro, bool allowMissing)
+        static bool IsSafeUnixPath(string path)
         {
+            return !string.IsNullOrEmpty(path) && path.StartsWith("/")
+                && path.IndexOfAny(new[] { '"', '\r', '\n', '\0' }) < 0;
+        }
+
+        static void AddVersionedCandidates(string root, string baseUnixDir, string binSuffix, System.Collections.Generic.List<string> candidates, ref bool managerFound)
+        {
+            string directory = root + baseUnixDir.Replace('/', '\\');
+            if (!Directory.Exists(directory)) return;
+            managerFound = true;
+            string[] entries;
+            try { entries = Directory.GetDirectories(directory); }
+            catch { return; }
+            Array.Sort(entries, delegate(string left, string right)
+            {
+                Version a, b;
+                Version.TryParse(Path.GetFileName(left).TrimStart('v'), out a);
+                Version.TryParse(Path.GetFileName(right).TrimStart('v'), out b);
+                return System.Collections.Generic.Comparer<Version>.Default.Compare(b, a);
+            });
+            foreach (string entry in entries)
+                candidates.Add(baseUnixDir + "/" + Path.GetFileName(entry) + binSuffix);
+        }
+
+        static string FindNode(string distro, bool allowMissing, out string cloudCliPath)
+        {
+            cloudCliPath = null;
             string prefix = DistroArgument(distro) + " --exec ";
+
+            // Tier 1: usable Node 22+ and cloudcli already on PATH.
             string versionOnPath = CaptureWsl(prefix + "/usr/bin/env node --version", expectedMissing: "node");
             Version parsed;
             bool compatible = Version.TryParse(versionOnPath.TrimStart('v'), out parsed) && parsed.Major >= 22;
-            // A usable pair on PATH takes precedence over any manager-specific layout.
             if (compatible && CaptureWsl(prefix + "/usr/bin/env cloudcli --version", expectedMissing: "cloudcli").Length > 0)
                 return "node";
+
+            // Tier 2: known version managers & system-level Node locations via \\wsl.localhost.
             string home = CaptureWsl(prefix + "/usr/bin/printenv HOME");
+            string homeTrim = home.StartsWith("/") ? home.TrimEnd('/') : "";
             var candidates = new System.Collections.Generic.List<string>();
             bool managerFound = false;
             string root = @"\\wsl.localhost\" + distro;
-            if (home.StartsWith("/"))
+            if (homeTrim.Length > 0)
             {
-                foreach (string relative in new[] { "/.nvm/versions/node", "/.local/share/fnm/node-versions",
-                    "/.volta/tools/image/node", "/.asdf/installs/nodejs", "/.local/share/mise/installs/node",
-                    "/.nodenv/versions" })
+                AddVersionedCandidates(root, homeTrim + "/.nvm/versions/node", "/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.local/share/fnm/node-versions", "/installation/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.fnm/node-versions", "/installation/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.volta/tools/image/node", "/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.asdf/installs/nodejs", "/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.local/share/mise/installs/node", "/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.nodenv/versions", "/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.local/share/pnpm/nodejs", "/bin/node", candidates, ref managerFound);
+                AddVersionedCandidates(root, homeTrim + "/.proto/tools/node", "/bin/node", candidates, ref managerFound);
+
+                foreach (string marker in new[] { "/.nvm/nvm.sh", "/.volta", "/.asdf", "/.local/share/mise",
+                    "/.nodenv", "/.local/share/fnm", "/.fnm", "/.proto", "/.local/share/pnpm" })
                 {
-                    string versions = home + relative;
-                    string directory = root + versions.Replace('/', '\\');
-                    if (!Directory.Exists(directory)) continue;
-                    managerFound = true;
-                    var entries = Directory.GetDirectories(directory);
-                    Array.Sort(entries, delegate(string left, string right)
+                    string markerWin = root + (homeTrim + marker).Replace('/', '\\');
+                    if (File.Exists(markerWin) || Directory.Exists(markerWin))
                     {
-                        Version a, b;
-                        Version.TryParse(Path.GetFileName(left).TrimStart('v'), out a);
-                        Version.TryParse(Path.GetFileName(right).TrimStart('v'), out b);
-                        return System.Collections.Generic.Comparer<Version>.Default.Compare(b, a);
-                    });
-                    foreach (string entry in entries)
-                    {
-                        string bin = relative.Contains("/fnm/") ? "/installation/bin/node" : "/bin/node";
-                        candidates.Add(versions + "/" + Path.GetFileName(entry) + bin);
+                        managerFound = true;
+                        break;
                     }
                 }
-                managerFound |= File.Exists(root + home.Replace('/', '\\') + @"\.nvm\nvm.sh");
+            }
+            AddVersionedCandidates(root, "/usr/local/n/versions/node", "/bin/node", candidates, ref managerFound);
+
+            var singleBins = new System.Collections.Generic.List<string> { "/home/linuxbrew/.linuxbrew/bin/node" };
+            if (homeTrim.Length > 0) singleBins.Add(homeTrim + "/.nix-profile/bin/node");
+            foreach (string singleBin in singleBins)
+            {
+                if (File.Exists(root + singleBin.Replace('/', '\\')))
+                    candidates.Add(singleBin);
             }
 
             string fallback = compatible ? "node" : null;
+            var seenCandidates = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
             foreach (string candidate in candidates)
             {
+                if (!seenCandidates.Add(candidate)) continue;
                 string version = CaptureWsl(prefix + QuoteArgument(candidate) + " --version");
                 if (!Version.TryParse(version.TrimStart('v'), out parsed) || parsed.Major < 22) continue;
                 if (fallback == null) fallback = candidate;
                 string sibling = candidate.Substring(0, candidate.LastIndexOf('/') + 1) + "cloudcli";
-                if (File.Exists(root + sibling.Replace('/', '\\'))) return candidate;
+                if (File.Exists(root + sibling.Replace('/', '\\')))
+                {
+                    cloudCliPath = sibling;
+                    return candidate;
+                }
+            }
+
+            var globalCliCandidates = new System.Collections.Generic.List<string>();
+            if (homeTrim.Length > 0)
+            {
+                foreach (string relCli in new[] { "/.volta/bin/cloudcli", "/.local/share/pnpm/cloudcli",
+                    "/.asdf/shims/cloudcli", "/.local/share/mise/shims/cloudcli", "/.proto/shims/cloudcli",
+                    "/.proto/bin/cloudcli", "/.npm-global/bin/cloudcli", "/.nix-profile/bin/cloudcli" })
+                {
+                    globalCliCandidates.Add(homeTrim + relCli);
+                }
+            }
+            globalCliCandidates.Add("/home/linuxbrew/.linuxbrew/bin/cloudcli");
+
+            if (fallback != null)
+            {
+                foreach (string cliCandidate in globalCliCandidates)
+                {
+                    if (File.Exists(root + cliCandidate.Replace('/', '\\')))
+                    {
+                        cloudCliPath = cliCandidate;
+                        return fallback;
+                    }
+                }
+            }
+
+            // Tier 3: login interactive shell fallback for custom/non-standard managers or PATH overrides.
+            string shellOut = CaptureWsl(
+                prefix + "/bin/sh -c \"s=\\\"${SHELL:-/bin/bash}\\\"; [ -x \\\"$s\\\" ] || s=/bin/sh; \\\"$s\\\" -lic 'echo __CCLI_START__; command -v cloudcli 2>/dev/null; echo __CCLI_SEP__; command -v node 2>/dev/null; echo __CCLI_END__' </dev/null\"",
+                null, 6000);
+            string shellCli = null;
+            string shellNode = null;
+            if (!string.IsNullOrEmpty(shellOut))
+            {
+                int startIdx = shellOut.IndexOf("__CCLI_START__", StringComparison.Ordinal);
+                int sepIdx = startIdx >= 0 ? shellOut.IndexOf("__CCLI_SEP__", startIdx + "__CCLI_START__".Length, StringComparison.Ordinal) : -1;
+                int endIdx = sepIdx >= 0 ? shellOut.IndexOf("__CCLI_END__", sepIdx + "__CCLI_SEP__".Length, StringComparison.Ordinal) : -1;
+                if (startIdx >= 0 && sepIdx > startIdx && endIdx > sepIdx)
+                {
+                    string cliSection = shellOut.Substring(startIdx + "__CCLI_START__".Length, sepIdx - startIdx - "__CCLI_START__".Length);
+                    foreach (string line in cliSection.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string t = line.Trim();
+                        if (IsSafeUnixPath(t)) { shellCli = t; break; }
+                    }
+                    string nodeSection = shellOut.Substring(sepIdx + "__CCLI_SEP__".Length, endIdx - sepIdx - "__CCLI_SEP__".Length);
+                    foreach (string line in nodeSection.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string t = line.Trim();
+                        if (IsSafeUnixPath(t)) { shellNode = t; break; }
+                    }
+                }
+            }
+            if (!string.IsNullOrEmpty(shellNode))
+            {
+                string shellNodeVer = CaptureWsl(prefix + QuoteArgument(shellNode) + " --version", null, 5000);
+                if (Version.TryParse(shellNodeVer.TrimStart('v'), out parsed) && parsed.Major >= 22)
+                {
+                    if (!string.IsNullOrEmpty(shellCli) && File.Exists(root + shellCli.Replace('/', '\\')))
+                    {
+                        cloudCliPath = shellCli;
+                        return shellNode;
+                    }
+                    int lastSlash = shellNode.LastIndexOf('/');
+                    if (lastSlash >= 0)
+                    {
+                        string sibling = shellNode.Substring(0, lastSlash + 1) + "cloudcli";
+                        if (File.Exists(root + sibling.Replace('/', '\\')))
+                        {
+                            cloudCliPath = sibling;
+                            return shellNode;
+                        }
+                    }
+                    if (fallback == null) fallback = shellNode;
+                }
+            }
+            if (fallback != null && !string.IsNullOrEmpty(shellCli) && File.Exists(root + shellCli.Replace('/', '\\')))
+            {
+                cloudCliPath = shellCli;
+                return fallback;
             }
             if (fallback != null) return fallback;
 
-            if (home.StartsWith("/"))
+            // Tier 4: launcher-managed isolated Node.js runtime (native ext4 first, then legacy NTFS).
+            if (homeTrim.Length > 0)
             {
-                string ext4Node = home.TrimEnd('/') + "/.local/share/cloudcli-launcher/node/bin/node";
+                string ext4Node = homeTrim + "/.local/share/cloudcli-launcher/node/bin/node";
                 string ext4Ver = CaptureWsl(prefix + QuoteArgument(ext4Node) + " --version");
                 if (Version.TryParse(ext4Ver.TrimStart('v'), out parsed) && parsed.Major >= 22)
                     return ext4Node;
@@ -2832,7 +3091,7 @@ namespace CloudCLI
             return text.Replace("\uFEFF", "").Replace("\0", "").Trim();
         }
 
-        static string CaptureWsl(string args, string expectedMissing = null)
+        static string CaptureWsl(string args, string expectedMissing = null, int timeoutMs = 20000)
         {
             var timer = Stopwatch.StartNew();
             try
@@ -2847,7 +3106,7 @@ namespace CloudCLI
                 {
                     var output = ReadAllBytesAsync(p.StandardOutput.BaseStream);
                     var errors = ReadAllBytesAsync(p.StandardError.BaseStream);
-                    if (!p.WaitForExit(20000))
+                    if (!p.WaitForExit(timeoutMs))
                     {
                         Log("WSL probe timed out after " + timer.ElapsedMilliseconds + " ms: " + args);
                         p.Kill();
