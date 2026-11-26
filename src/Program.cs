@@ -1895,12 +1895,21 @@ namespace CloudCLI
                 StandardOutputEncoding = Encoding.UTF8
             };
             ownedServer = Process.Start(processInfo);
-            Task progressReader = ReadServerProgressAsync(ownedServer, setActiveStep);
-
-            TimeSpan timeout = setupMode == "auto" ? TimeSpan.FromSeconds(300) : TimeSpan.FromSeconds(120);
-            var startup = Stopwatch.StartNew();
-            while (startup.Elapsed < timeout)
+            bool installingCli = false;
+            long phaseStartTicks = Stopwatch.GetTimestamp();
+            Task progressReader = ReadServerProgressAsync(ownedServer, setActiveStep, delegate (bool isInstalling)
             {
+                Volatile.Write(ref installingCli, isInstalling);
+                Interlocked.Exchange(ref phaseStartTicks, Stopwatch.GetTimestamp());
+            });
+
+            var startup = Stopwatch.StartNew();
+            while (startup.Elapsed < TimeSpan.FromSeconds(720))
+            {
+                TimeSpan phaseLimit = Volatile.Read(ref installingCli) ? TimeSpan.FromSeconds(600) : TimeSpan.FromSeconds(120);
+                double phaseElapsedSec = (Stopwatch.GetTimestamp() - Interlocked.Read(ref phaseStartTicks)) / (double)Stopwatch.Frequency;
+                if (phaseElapsedSec >= phaseLimit.TotalSeconds) break;
+
                 state = await Task.Run(delegate { return Probe(); });
                 if (exiting) return;
 
@@ -1953,11 +1962,11 @@ namespace CloudCLI
                 await Task.Delay(500);
                 if (exiting) return;
             }
-            Log("server NOT ready after " + (int)timeout.TotalSeconds + "s");
+            Log("server NOT ready after " + (int)startup.Elapsed.TotalSeconds + "s");
             throw new Exception(T("等待服务启动超时。请查看日志 logs\\launcher.log 与 logs\\server.log", "等候服務啟動逾時。請查看記錄檔 logs\\launcher.log 與 logs\\server.log", "Timed out waiting for CloudCLI to start. Check logs\\launcher.log and logs\\server.log"));
         }
 
-        async Task ReadServerProgressAsync(Process server, Action<int> setActiveStep)
+        async Task ReadServerProgressAsync(Process server, Action<int> setActiveStep, Action<bool> setInstallingCli)
         {
             if (server == null) return;
             try
@@ -1974,16 +1983,19 @@ namespace CloudCLI
                     }
                     else if (line == "PROGRESS:installing_cli")
                     {
+                        setInstallingCli(true);
                         setActiveStep(2);
-                        UpdateStep(2, "active", T("正在通过 npm 安装 CloudCLI 到启动器独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到啟動器獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into the launcher folder (may take 1–2 minutes)…"));
+                        UpdateStep(2, "active", T("正在通过 npm 安装 CloudCLI 到 WSL 独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到 WSL 獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into WSL isolated folder (may take 1–2 minutes)…"));
                     }
                     else if (line == "PROGRESS:verifying_cli")
                     {
+                        setInstallingCli(false);
                         setActiveStep(2);
                         UpdateStep(2, "active", T("正在校验 CloudCLI 可执行文件…", "正在驗證 CloudCLI 執行檔…", "Verifying CloudCLI executable…"));
                     }
                     else if (line == "PROGRESS:starting_server")
                     {
+                        setInstallingCli(false);
                         UpdateStep(2, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
                         setActiveStep(3);
                         UpdateStep(3, "active", T("正在启动 CloudCLI 服务…", "正在啟動 CloudCLI 服務…", "Starting CloudCLI server…"));
@@ -2251,16 +2263,15 @@ namespace CloudCLI
         async Task<string> InstallManagedNodeAsync(string distro)
         {
             UpdateStep(1, "active", T(
-                "未检测到 Node.js 22+，正在下载并安装独立版 Node.js 22 LTS 到启动器目录…",
-                "未偵測到 Node.js 22+，正在下載並安裝獨立版 Node.js 22 LTS 到啟動器目錄…",
-                "Node.js 22+ not found. Downloading isolated Node.js 22 LTS into the launcher folder…"));
-            Log("installing managed Node.js 22 LTS into data/runtime/" + distro + "/node");
+                "未检测到 Node.js 22+，正在下载并安装独立版 Node.js 22 LTS…",
+                "未偵測到 Node.js 22+，正在下載並安裝獨立版 Node.js 22 LTS…",
+                "Node.js 22+ not found. Downloading isolated Node.js 22 LTS…"));
+            Log("installing managed Node.js 22 LTS into ~/.local/share/cloudcli-launcher/node in " + distro);
 
             string script = string.Join("\n", new[]
             {
                 "set -eu",
-                "distro=\"$1\"",
-                "base=\"./data/runtime/$distro\"",
+                "base=\"$HOME/.local/share/cloudcli-launcher\"",
                 "target=\"$base/node\"",
                 "tmp=\"$base/tmp\"",
                 "mkdir -p \"$tmp\"",
@@ -2298,16 +2309,16 @@ namespace CloudCLI
                 "echo \"PROGRESS:node_extracting:$ver\"",
                 "stage=$(mktemp -d \"$tmp/node-XXXXXX\")",
                 "tar -xf \"$archive\" -C \"$stage\" --strip-components=1",
+                "PATH=\"$stage/bin:$PATH\" \"$stage/bin/node\" --version >/dev/null",
+                "PATH=\"$stage/bin:$PATH\" \"$stage/bin/npm\" --version >/dev/null",
                 "rm -rf \"$target\"",
                 "mv \"$stage\" \"$target\"",
                 "rm -f \"$archive\" \"$shasums\"",
-                "\"$target/bin/node\" --version >/dev/null",
-                "\"$target/bin/npm\" --version >/dev/null",
                 "echo \"PROGRESS:node_done:$ver\"",
                 ""
             });
 
-            var psi = new ProcessStartInfo("wsl.exe", DistroArgument(distro) + " --exec /bin/sh -s -- " + QuoteArgument(distro))
+            var psi = new ProcessStartInfo("wsl.exe", DistroArgument(distro) + " --exec /bin/sh -s")
             {
                 WorkingDirectory = AppDir,
                 UseShellExecute = false,
@@ -2396,7 +2407,12 @@ namespace CloudCLI
                 }
             }
 
-            string nodePath = "./data/runtime/" + distro + "/node/bin/node";
+            string home = await Task.Run(delegate
+            {
+                return CaptureWsl(DistroArgument(distro) + " --exec /usr/bin/printenv HOME");
+            });
+            string nodePath = (home.StartsWith("/") ? home.TrimEnd('/') : "/root")
+                + "/.local/share/cloudcli-launcher/node/bin/node";
             string installedVersion = await Task.Run(delegate
             {
                 return CaptureWsl(DistroArgument(distro) + " --exec " + QuoteArgument(nodePath) + " --version");
@@ -2542,6 +2558,14 @@ namespace CloudCLI
                 if (File.Exists(root + sibling.Replace('/', '\\'))) return candidate;
             }
             if (fallback != null) return fallback;
+
+            if (home.StartsWith("/"))
+            {
+                string ext4Node = home.TrimEnd('/') + "/.local/share/cloudcli-launcher/node/bin/node";
+                string ext4Ver = CaptureWsl(prefix + QuoteArgument(ext4Node) + " --version");
+                if (Version.TryParse(ext4Ver.TrimStart('v'), out parsed) && parsed.Major >= 22)
+                    return ext4Node;
+            }
 
             string managedWin = Path.Combine(AppDir, "data", "runtime", distro, "node", "bin", "node");
             if (File.Exists(managedWin))

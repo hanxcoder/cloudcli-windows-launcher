@@ -17,7 +17,7 @@ node --version
 npm --version
 ```
 
-> **提示**：如果你在全新的 WSL 上通过启动器的「帮我配置并启动」完成了初始化，启动器会将独立版 Node.js 安装在自身 `data/runtime/` 目录下，不会修改你的系统环境变量。若需要在 WSL 中自行全局安装 Claude Code、Codex 等 CLI，请先在 WSL 用户环境中安装 Node.js 22+（如通过 `nvm`）。
+> **提示**：如果你在全新的 WSL 上通过启动器的「帮我配置并启动」完成了初始化，启动器会将独立版 Node.js 安装在 WSL 内的 `~/.local/share/cloudcli-launcher/` 目录下，不会修改你的系统环境变量。若需要在 WSL 中自行全局安装 Claude Code、Codex 等 CLI，请先在 WSL 用户环境中安装 Node.js 22+（如通过 `nvm`）。
 
 ---
 

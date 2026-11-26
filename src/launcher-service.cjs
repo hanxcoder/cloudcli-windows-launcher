@@ -7,7 +7,8 @@ const { spawn } = require("node:child_process");
 const [mode, port] = process.argv.slice(2);
 const root = __dirname;
 const home = os.homedir();
-const runtime = path.join(root, "data", "runtime", process.env.WSL_DISTRO_NAME || "default");
+const runtime = path.join(home, ".local", "share", "cloudcli-launcher");
+const legacyRuntime = path.join(root, "data", "runtime", process.env.WSL_DISTRO_NAME || "default");
 const env = { ...process.env, PATH: path.dirname(process.execPath) + ":" + process.env.PATH };
 fs.mkdirSync(path.join(root, "logs"), { recursive: true });
 const log = fs.openSync(path.join(root, "logs", "server.log"), "w");
@@ -53,8 +54,10 @@ async function main() {
     if (!["auto", "existing"].includes(mode) || !/^\d+$/.test(port) || +port < 1 || +port > 65535) return 1;
     report("checking_cli");
     const managed = path.join(runtime, "package", "bin", "cloudcli");
+    const legacyManaged = path.join(legacyRuntime, "package", "bin", "cloudcli");
     let cli = findExecutable("cloudcli");
     if (!cli && fs.existsSync(managed)) cli = managed;
+    if (!cli && fs.existsSync(legacyManaged)) cli = legacyManaged;
     if (!cli) {
         if (mode !== "auto") return 77;
         const npm = findExecutable("npm");
@@ -64,7 +67,7 @@ async function main() {
         fs.mkdirSync(tmp, { recursive: true });
         const stage = fs.mkdtempSync(path.join(tmp, "install-"));
         try {
-            const code = await run(npm, ["install", "--global", "--prefix", stage, "@cloudcli-ai/cloudcli"],
+            const code = await run(npm, ["install", "--global", "--no-audit", "--no-fund", "--prefix", stage, "@cloudcli-ai/cloudcli"],
                 stage, { ...env, TMPDIR: tmp, npm_config_cache: path.join(runtime, "cache") });
             if (code || stopping) return 79;
             fs.accessSync(path.join(stage, "bin", "cloudcli"), fs.constants.X_OK);
