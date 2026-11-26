@@ -19,7 +19,9 @@ Run CloudCLI in WSL and open its web interface in a Windows desktop window. This
 
    Open `http://localhost:3001/` in a Windows browser to check that the CloudCLI page loads. Press `Ctrl+C` in the WSL terminal to stop the test instance before trying automatic startup.
 3. Install the Microsoft Edge WebView2 Runtime on Windows, then download and run [CloudCLI-Setup-2.0.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.0.0/CloudCLI-Setup-2.0.0.exe). On the final installer page, select **Run CloudCLI** to open it immediately. The checkbox is cleared by default.
-4. Open CloudCLI. Choose **Set it up for me** to reuse CloudCLI on port 3001 or install it in the launcher's data directory if needed. Choose **Customize or use an existing setup** to set a local port. To connect to a service you manage yourself, clear the option to start it when offline. The launcher remembers your choice after a successful connection.
+4. Open CloudCLI. Choose **Set it up for me** to show live deployment progress while automatically checking and preparing WSL (guiding `wsl --install` if WSL is missing), an isolated Node.js 22+ runtime if needed, and CloudCLI on port 3001. Choose **Customize or use an existing setup** to set a local port. To connect to a service you manage yourself, clear the option to start it when offline. The launcher remembers your choice after a successful connection.
+
+> **AI Coding CLIs**: CloudCLI is the server and web UI framework. To use **Claude Code**, **OpenAI Codex CLI**, **Gemini CLI**, or other supported terminal agents inside CloudCLI, install and sign in to them inside your WSL distribution. See the standalone [AI Coding CLI Deployment Guide](docs/agent-clis.md).
 
 Press `F5` to reload or `Ctrl+I` to open developer tools. Links requesting a new window open through Windows. The launcher follows the Windows display language. Set `CLOUDCLI_LANG` to `en`, `zh-CN`, or `zh-TW` to override it.
 To update an existing installation silently, run the installer with `/UPDATE`. It uses the registered installation directory and exits with code 2 if the launcher is missing.

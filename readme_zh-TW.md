@@ -19,7 +19,9 @@
 
    在 Windows 上用瀏覽器開啟 `http://localhost:3001/`，確認頁面可以載入。接著在 WSL 終端機按 `Ctrl+C` 停止測試服務。下次開啟桌面視窗時，啟動器會自動啟動服務。
 3. 在 Windows 安裝 Microsoft Edge WebView2 Runtime，再下載並執行 [CloudCLI-Setup-2.0.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.0.0/CloudCLI-Setup-2.0.0.exe)。如需立即啟動，可在安裝完成頁勾選「執行 CloudCLI」，預設不勾選。
-4. 開啟 CloudCLI。選擇「自動設定並啟動」會優先使用現有的 CloudCLI，必要時才安裝到啟動器自己的資料夾，預設連接埠為 3001。選擇「自訂設定或使用現有部署」可指定本機連接埠。如果服務由你自行管理，請取消勾選服務未執行時自動啟動的選項。連線成功後會儲存設定。
+4. 開啟 CloudCLI。選擇「自動設定並啟動」會在畫面即時顯示部署進度，自動檢查並準備 WSL（缺少時引導安裝 WSL）、依需求安裝獨立版 Node.js 22+ 執行階段以及 CloudCLI（預設連接埠 3001）。選擇「自訂設定或使用現有部署」可指定本機連接埠。如果服務由你自行管理，請取消勾選服務未執行時自動啟動的選項。連線成功後會儲存設定。
+
+> **AI 程式設計 CLI 部署**：CloudCLI 本身只是伺服器端與介面框架。若要在其中使用 **Claude Code**、**Codex CLI**、**Gemini CLI** 等代理，請於 WSL 發行版內安裝並登入對應 CLI，詳見獨立文件 [WSL 中部署 AI 程式設計 CLI 指南](docs/agent-clis.zh-TW.md)。
 
 按 `F5` 可重新載入，按 `Ctrl+I` 可開啟開發人員工具。要求開新視窗的連結會交由 Windows 處理。視窗預設採用 Windows 顯示語言，也可以在啟動前將 `CLOUDCLI_LANG` 設為 `en`、`zh-CN` 或 `zh-TW`。
 若要在背景更新，請加上 `/UPDATE` 參數執行安裝程式。更新會使用已登記的安裝目錄。如果找不到已安裝的啟動器，安裝程式會傳回結束代碼 2。

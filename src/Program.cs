@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -105,7 +106,10 @@ namespace CloudCLI
 
         bool webReady;
         bool showingInternalPage;
+        bool showingProgressPage;
         bool setupSubmitting;
+        readonly string[] stepStates = new string[5];
+        readonly string[] stepDetails = new string[5];
 
         async Task<bool> EnsureWebViewAsync()
         {
@@ -156,7 +160,11 @@ namespace CloudCLI
                 };
                 web.CoreWebView2.NavigationCompleted += delegate (object s2, CoreWebView2NavigationCompletedEventArgs ev)
                 {
-                    if (!showingInternalPage)
+                    if (showingInternalPage && showingProgressPage)
+                    {
+                        SyncProgressToWeb();
+                    }
+                    else if (!showingInternalPage)
                     {
                         if (ev.IsSuccess) Log("navigation completed successfully");
                         else Log("navigation failed: " + ev.WebErrorStatus);
@@ -215,6 +223,7 @@ namespace CloudCLI
                 return;
             }
             showingInternalPage = true;
+            showingProgressPage = false;
             status.Visible = false;
             web.Visible = true;
             web.BringToFront();
@@ -222,18 +231,67 @@ namespace CloudCLI
             web.Focus();
         }
 
-        void ShowLoading(string text)
+        void ResetProgress()
         {
+            for (int i = 0; i < stepStates.Length; i++)
+            {
+                stepStates[i] = "pending";
+                stepDetails[i] = "";
+            }
+        }
+
+        void ShowProgress(string initialDetail)
+        {
+            stepStates[0] = "active";
+            stepDetails[0] = initialDetail ?? "";
             if (!webReady || web == null || web.CoreWebView2 == null)
             {
-                SetStatus(text);
+                SetStatus(initialDetail);
                 return;
             }
             showingInternalPage = true;
+            showingProgressPage = true;
             status.Visible = false;
             web.Visible = true;
             web.BringToFront();
-            web.CoreWebView2.NavigateToString(BuildLoadingHtml(text));
+            web.CoreWebView2.NavigateToString(BuildProgressHtml());
+        }
+
+        void UpdateStep(int index, string state, string detail)
+        {
+            if (index < 0 || index >= stepStates.Length) return;
+            try
+            {
+                Action apply = delegate
+                {
+                    stepStates[index] = state ?? "pending";
+                    stepDetails[index] = detail ?? "";
+                    if (!string.IsNullOrEmpty(detail)) status.Text = detail;
+                    if (webReady && showingInternalPage && showingProgressPage && web != null && web.CoreWebView2 != null)
+                    {
+                        web.CoreWebView2.ExecuteScriptAsync("window.__setStep && window.__setStep("
+                            + index.ToString(CultureInfo.InvariantCulture) + ",'"
+                            + JsEscape(stepStates[index]) + "','" + JsEscape(stepDetails[index]) + "');");
+                    }
+                };
+                if (InvokeRequired) BeginInvoke(apply);
+                else apply();
+            }
+            catch { }
+        }
+
+        void SyncProgressToWeb()
+        {
+            if (!webReady || !showingInternalPage || !showingProgressPage || web == null || web.CoreWebView2 == null) return;
+            var sb = new StringBuilder();
+            for (int i = 0; i < stepStates.Length; i++)
+            {
+                sb.Append("window.__setStep && window.__setStep(")
+                  .Append(i.ToString(CultureInfo.InvariantCulture)).Append(",'")
+                  .Append(JsEscape(stepStates[i] ?? "pending")).Append("','")
+                  .Append(JsEscape(stepDetails[i] ?? "")).Append("');");
+            }
+            web.CoreWebView2.ExecuteScriptAsync(sb.ToString());
         }
 
         static string JsEscape(string value)
@@ -269,18 +327,19 @@ namespace CloudCLI
                     --radius: 14px;
                 }
                 * { box-sizing: border-box; margin: 0; padding: 0; }
-                html, body {
+                html {
                     height: 100%;
+                    background: var(--bg);
+                }
+                body {
+                    min-height: 100%;
                     background: var(--bg);
                     color: var(--text);
                     font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
                     -webkit-font-smoothing: antialiased;
                     user-select: none;
-                }
-                body {
                     display: flex;
-                    align-items: center;
-                    justify-content: center;
+                    flex-direction: column;
                     padding: 24px;
                     background-image:
                         radial-gradient(640px 320px at 50% 0%, rgba(59, 130, 246, 0.12), transparent 70%),
@@ -298,68 +357,194 @@ namespace CloudCLI
             </svg>";
         }
 
-        string BuildLoadingHtml(string message)
+        string BuildProgressHtml()
         {
+            string heading = T("正在部署并启动 CloudCLI", "正在部署並啟動 CloudCLI", "Deploying and starting CloudCLI");
+            string subheading = setupMode == "auto"
+                ? T("自动检查并准备所需运行环境，请稍候", "自動檢查並準備所需執行環境，請稍候", "Automatically checking and preparing your environment")
+                : T("正在连接并检查 WSL 服务状态", "正在連線並檢查 WSL 服務狀態", "Connecting and verifying your WSL service");
+            string[] titles = new[]
+            {
+                T("检查本机端口与现有服务", "檢查本機連接埠與現有服務", "Check local port & existing service"),
+                T("检查并准备 WSL 环境", "檢查並準備 WSL 環境", "Check & prepare WSL"),
+                T("检查并准备 Node.js 22+ 与 npm", "檢查並準備 Node.js 22+ 與 npm", "Check & prepare Node.js 22+ & npm"),
+                T("检查并准备 CloudCLI", "檢查並準備 CloudCLI", "Check & prepare CloudCLI"),
+                T("启动服务并连接界面", "啟動服務並連線介面", "Start service & connect")
+            };
+
+            var stepsHtml = new StringBuilder();
+            for (int i = 0; i < titles.Length; i++)
+            {
+                string state = string.IsNullOrEmpty(stepStates[i]) ? "pending" : stepStates[i];
+                string detail = stepDetails[i] ?? "";
+                stepsHtml.Append("<div class=\"step ").Append(state).Append("\" id=\"step-").Append(i).Append("\">")
+                    .Append("<div class=\"step-icon\" aria-hidden=\"true\">")
+                    .Append("<span class=\"icon-pending\"></span>")
+                    .Append("<span class=\"icon-active\"></span>")
+                    .Append("<svg class=\"icon-done\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\"><path d=\"M5 12.5L10 17.5L19 7\" stroke=\"currentColor\" stroke-width=\"2.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>")
+                    .Append("<svg class=\"icon-error\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\"><path d=\"M7 7L17 17M17 7L7 17\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"/></svg>")
+                    .Append("</div>")
+                    .Append("<div class=\"step-body\">")
+                    .Append("<div class=\"step-title\">").Append(Html(titles[i])).Append("</div>")
+                    .Append("<div class=\"step-detail\" id=\"step-detail-").Append(i).Append("\">").Append(Html(detail)).Append("</div>")
+                    .Append("</div></div>");
+            }
+
             return "<!DOCTYPE html><html lang=\"" + LangName() + "\"><head><meta charset=\"utf-8\">"
                 + "<style>" + SharedCss() + @"
-                .wrap {
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    gap: 20px;
-                    text-align: center;
-                    max-width: 480px;
+                .card {
+                    margin: auto;
+                    width: 100%;
+                    max-width: 520px;
+                    background: var(--surface);
+                    border: 1px solid var(--border);
+                    border-radius: 20px;
+                    padding: 30px;
+                    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
                 }
-                .brand {
-                    width: 56px;
-                    height: 56px;
-                    border-radius: 16px;
-                    background: linear-gradient(145deg, rgba(59, 130, 246, 0.18), rgba(99, 102, 241, 0.08));
-                    border: 1px solid rgba(96, 165, 250, 0.25);
+                .header {
+                    display: flex;
+                    align-items: center;
+                    gap: 14px;
+                    margin-bottom: 18px;
+                }
+                .logo {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 12px;
+                    background: linear-gradient(145deg, rgba(59, 130, 246, 0.2), rgba(99, 102, 241, 0.08));
+                    border: 1px solid rgba(96, 165, 250, 0.28);
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+                    flex-shrink: 0;
                 }
-                .spinner {
-                    width: 24px;
-                    height: 24px;
-                    border: 2.5px solid rgba(255, 255, 255, 0.12);
+                .title { font-size: 19px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+                .subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 3px; }
+                .bar-track {
+                    height: 4px;
+                    border-radius: 999px;
+                    background: rgba(255, 255, 255, 0.07);
+                    overflow: hidden;
+                    margin-bottom: 20px;
+                }
+                .bar-fill {
+                    height: 100%;
+                    width: 10%;
+                    border-radius: 999px;
+                    background: linear-gradient(90deg, #3b82f6, #60a5fa);
+                    transition: width 0.28s ease;
+                }
+                .steps {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                }
+                .step {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 12px;
+                    padding: 11px 14px;
+                    border-radius: 12px;
+                    border: 1px solid transparent;
+                    transition: background 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+                }
+                .step.pending { opacity: 0.52; }
+                .step.active {
+                    background: var(--surface-active);
+                    border-color: rgba(59, 130, 246, 0.36);
+                    opacity: 1;
+                }
+                .step.done { opacity: 0.92; }
+                .step.error {
+                    background: var(--danger-bg);
+                    border-color: var(--danger-border);
+                    opacity: 1;
+                }
+                .step-icon {
+                    width: 22px;
+                    height: 22px;
+                    margin-top: 1px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                }
+                .icon-pending, .icon-active, .icon-done, .icon-error { display: none; }
+                .step.pending .icon-pending {
+                    display: block;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 50%;
+                    border: 2px solid var(--text-muted);
+                }
+                .step.active .icon-active {
+                    display: block;
+                    width: 18px;
+                    height: 18px;
+                    border: 2.2px solid rgba(96, 165, 250, 0.25);
                     border-top-color: #60a5fa;
                     border-radius: 50%;
                     animation: spin 0.8s linear infinite;
                 }
+                .step.done .icon-done {
+                    display: block;
+                    color: #34d399;
+                }
+                .step.error .icon-error {
+                    display: block;
+                    color: #f87171;
+                }
                 @keyframes spin { to { transform: rotate(360deg); } }
-                .status-row {
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                }
-                .msg {
-                    font-size: 14.5px;
+                .step-body { flex: 1; min-width: 0; }
+                .step-title { font-size: 13.8px; font-weight: 500; color: var(--text); }
+                .step-detail {
+                    font-size: 12.2px;
                     color: var(--text-secondary);
-                    line-height: 1.5;
+                    margin-top: 3px;
+                    line-height: 1.45;
                     user-select: text;
+                    word-break: break-word;
                 }
-                .sub {
-                    font-size: 12px;
-                    color: var(--text-muted);
-                    letter-spacing: 0.02em;
-                }
+                .step-detail:empty { display: none; }
+                .step.error .step-detail { color: var(--danger-text); }
                 </style></head><body>
-                <div class=""wrap"">
-                    <div class=""brand"">" + LogoSvg() + @"</div>
-                    <div class=""status-row"">
-                        <div class=""spinner""></div>
-                        <div class=""msg"" id=""statusText"">" + Html(message) + @"</div>
+                <main class=""card"">
+                    <div class=""header"">
+                        <div class=""logo"">" + LogoSvg() + @"</div>
+                        <div>
+                            <h1 class=""title"">" + Html(heading) + @"</h1>
+                            <div class=""subtitle"">" + Html(subheading) + @"</div>
+                        </div>
                     </div>
-                    <div class=""sub"">CloudCLI Desktop Launcher for WSL</div>
-                </div>
+                    <div class=""bar-track""><div class=""bar-fill"" id=""barFill""></div></div>
+                    <div class=""steps"">" + stepsHtml.ToString() + @"</div>
+                </main>
                 <script>
-                    window.__setStatus = function(t) {
-                        var el = document.getElementById('statusText');
-                        if (el) el.textContent = t;
+                    function refreshBar() {
+                        var steps = document.querySelectorAll('.step');
+                        var score = 0;
+                        for (var i = 0; i < steps.length; i++) {
+                            if (steps[i].classList.contains('done')) score += 1;
+                            else if (steps[i].classList.contains('active')) score += 0.45;
+                        }
+                        var pct = Math.max(8, Math.min(100, Math.round((score / steps.length) * 100)));
+                        var fill = document.getElementById('barFill');
+                        if (fill) fill.style.width = pct + '%';
+                    }
+                    window.__setStep = function(idx, state, detail) {
+                        var el = document.getElementById('step-' + idx);
+                        var d = document.getElementById('step-detail-' + idx);
+                        if (!el) return;
+                        el.className = 'step ' + (state || 'pending');
+                        if (d) d.textContent = detail || '';
+                        refreshBar();
                     };
+                    window.__setStatus = function(t) {
+                        var active = document.querySelector('.step.active .step-detail');
+                        if (active) active.textContent = t || '';
+                    };
+                    refreshBar();
                 </script></body></html>";
         }
 
@@ -375,9 +560,9 @@ namespace CloudCLI
             string autoTitle = T("帮我配置并启动", "自動設定並啟動", "Set it up for me");
             string recommended = T("推荐", "推薦", "Recommended");
             string autoDesc = T(
-                "优先复用已有的 CloudCLI；需要安装时，会通过 npm 安装到启动器自己的目录。需要 WSL、Node.js 22 或更高版本和 npm。",
-                "優先使用現有的 CloudCLI；需要安裝時，會透過 npm 安裝到啟動器自己的目錄。需要 WSL、Node.js 22 以上版本及 npm。",
-                "Use an existing installation or download CloudCLI to the launcher's own folder. Requires WSL, Node.js 22 or later, and npm.");
+                "全自动检查并准备运行环境：缺少 WSL 时引导安装，缺少 Node.js 22+ 或 CloudCLI 时自动安装到启动器独立目录。",
+                "全自動檢查並準備執行環境：缺少 WSL 時引導安裝，缺少 Node.js 22+ 或 CloudCLI 時自動安裝到啟動器獨立目錄。",
+                "Automatically checks and prepares WSL (guiding installation if missing), an isolated Node.js 22+ runtime if needed, and CloudCLI in the launcher's folder.");
             string customTitle = T("自定义或使用已有部署", "自訂設定或使用現有部署", "Customize or use an existing setup");
             string customDesc = T(
                 "指定自定义本机端口，或直接连接你自己管理的 CloudCLI 服务。",
@@ -413,6 +598,7 @@ namespace CloudCLI
             return "<!DOCTYPE html><html lang=\"" + LangName() + "\"><head><meta charset=\"utf-8\">"
                 + "<style>" + SharedCss() + @"
                 .card {
+                    margin: auto;
                     width: 100%;
                     max-width: 540px;
                     background: var(--surface);
@@ -834,8 +1020,9 @@ namespace CloudCLI
 
         async Task StartFromWindowAsync(bool configure)
         {
-            string initialText = T("正在启动 CloudCLI…", "正在啟動 CloudCLI…", "Starting CloudCLI…");
-            ShowLoading(initialText);
+            string initialText = T("正在检查本机端口与现有服务…", "正在檢查本機連接埠與現有服務…", "Checking local port and existing service…");
+            ResetProgress();
+            ShowProgress(initialText);
             status.Text = initialText;
             await BootAsync(configure);
             if (!connected && !exiting) ShowSetup(status.Text);
@@ -1318,23 +1505,33 @@ namespace CloudCLI
 
         async Task BootAsync(bool configure)
         {
+            int activeStep = 0;
             try
             {
+                UpdateStep(0, "active", string.Format(T(
+                    "正在检测本机端口 {0}…", "正在偵測本機連接埠 {0}…", "Checking local port {0}…"), Port));
                 PortState state = await Task.Run(delegate { return Probe(); });
                 if (exiting) return;
                 if (state != PortState.Available && state != PortState.CloudCli) throw PortCheckError(state);
 
                 if (state == PortState.Available)
                 {
-                    SetStatus(T("正在 WSL 中启动 CloudCLI 服务…", "正在 WSL 中啟動 CloudCLI 服務…", "Starting the CloudCLI server in WSL..."));
+                    UpdateStep(0, "done", string.Format(T(
+                        "端口 {0} 可用", "連接埠 {0} 可用", "Port {0} is available"), Port));
+                    activeStep = 1;
                     if (setupMode == "connect") throw new InvalidOperationException(T(
                         "请先启动已有的 CloudCLI 服务，然后重试。", "請先啟動現有的 CloudCLI 服務，再試一次。",
                         "Start your CloudCLI service, then try again."));
-                    await StartServerAsync();
+                    await StartServerAsync(delegate (int step) { activeStep = step; });
                 }
                 else
                 {
                     Log("using existing CloudCLI server");
+                    string reused = T("已检测到运行中的 CloudCLI 服务", "已偵測到執行中的 CloudCLI 服務", "Existing CloudCLI service detected");
+                    UpdateStep(0, "done", reused);
+                    UpdateStep(1, "done", T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)"));
+                    UpdateStep(2, "done", T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)"));
+                    UpdateStep(3, "done", T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)"));
                 }
                 if (configure && !exiting) SaveSetup();
             }
@@ -1343,6 +1540,7 @@ namespace CloudCLI
                 if (exiting) return;
                 StopOwnedServer();
                 Log("boot failed: " + e);
+                UpdateStep(activeStep, "error", e.Message);
                 SetStatus(T("启动失败：", "啟動失敗：", "Startup failed: ") + e.Message);
                 return;
             }
@@ -1353,48 +1551,97 @@ namespace CloudCLI
             await ShowPage();
         }
 
-        async Task StartServerAsync()
+        async Task StartServerAsync(Action<int> setActiveStep)
         {
+            setActiveStep(1);
+            UpdateStep(1, "active", T("正在检测已安装的 WSL 发行版…", "正在偵測已安裝的 WSL 發行版…", "Detecting WSL distribution…"));
             string distro = await Task.Run(delegate { return DetectDistro(); });
-            if (distro == null) throw new InvalidOperationException(T(
-                "未找到可用的 WSL 发行版。请先安装并初始化一个发行版，然后重试。",
-                "找不到可用的 WSL 發行版。請先安裝發行版並完成初次設定，再試一次。",
-                "No WSL distribution was found. Install a distribution and complete its first-run setup, then try again."));
+            if (exiting) return;
+            if (distro == null)
+            {
+                if (setupMode == "auto")
+                {
+                    distro = await InstallWslAsync();
+                }
+                else
+                {
+                    throw new InvalidOperationException(T(
+                        "未找到可用的 WSL 发行版。请先安装并初始化一个发行版，然后重试，或选择“帮我配置并启动”。",
+                        "找不到可用的 WSL 發行版。請先安裝發行版並完成初次設定，再試一次，或選擇「自動設定並啟動」。",
+                        "No WSL distribution was found. Install a distribution and complete its first-run setup, or choose Set it up for me."));
+                }
+            }
+            else if (setupMode == "auto")
+            {
+                bool ready = await Task.Run(delegate { return ProbeWslReady(distro); });
+                if (exiting) return;
+                if (!ready)
+                {
+                    throw new InvalidOperationException(string.Format(T(
+                        "检测到 WSL 发行版 {0}，但尚无法执行 Linux 命令。请先在终端完成该发行版的首次初始化（创建用户名和密码），或重启电脑后再重试。",
+                        "偵測到 WSL 發行版 {0}，但尚無法執行 Linux 命令。請先在終端機完成該發行版的初次設定（建立使用者名稱與密碼），或重新啟動電腦後再試。",
+                        "Detected WSL distribution {0}, but it is not ready to run Linux commands yet. Complete its first-run user setup in a terminal (or reboot Windows) and try again."), distro));
+                }
+            }
             Log("distro: " + distro);
+            UpdateStep(1, "done", string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), distro));
 
             // WSL may have started a service while the distribution was detected.
             PortState state = await Task.Run(delegate { return Probe(); });
             if (exiting || state == PortState.CloudCli) return;
             if (state != PortState.Available) throw PortCheckError(state);
 
+            setActiveStep(2);
+            UpdateStep(2, "active", T("正在检查 WSL 中的 Node.js 22+ 与 npm…", "正在檢查 WSL 中的 Node.js 22+ 與 npm…", "Checking Node.js 22+ and npm in WSL…"));
             var discovery = Stopwatch.StartNew();
-            string node = await Task.Run(delegate { return FindNode(distro); });
-            Log("Selected Node.js after " + discovery.ElapsedMilliseconds + " ms: " + node);
+            string node = await Task.Run(delegate { return FindNode(distro, setupMode == "auto"); });
             if (exiting) return;
+            if (node == null)
+            {
+                node = await InstallManagedNodeAsync(distro);
+                if (exiting) return;
+            }
+            Log("Selected Node.js after " + discovery.ElapsedMilliseconds + " ms: " + node);
+            UpdateStep(2, "done", node == "node"
+                ? T("已就绪（系统 PATH 中的 Node.js）", "已就緒（系統 PATH 中的 Node.js）", "Ready (Node.js on PATH)")
+                : string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), node));
+
             state = await Task.Run(delegate { return Probe(); });
             if (exiting || state == PortState.CloudCli) return;
             if (state != PortState.Available) throw PortCheckError(state);
+
+            setActiveStep(3);
+            UpdateStep(3, "active", T("正在检查 WSL 中的 CloudCLI…", "正在檢查 WSL 中的 CloudCLI…", "Checking CloudCLI in WSL…"));
             var processInfo = new ProcessStartInfo("wsl.exe", DistroArgument(distro)
                 + " --exec " + QuoteArgument(node) + " ./launcher-service.cjs " + setupMode + " " + Port)
             {
                 WorkingDirectory = AppDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                RedirectStandardInput = true
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                StandardOutputEncoding = Encoding.UTF8
             };
             ownedServer = Process.Start(processInfo);
+            Task progressReader = ReadServerProgressAsync(ownedServer, setActiveStep);
 
+            TimeSpan timeout = setupMode == "auto" ? TimeSpan.FromSeconds(300) : TimeSpan.FromSeconds(120);
             var startup = Stopwatch.StartNew();
-            while (startup.Elapsed < TimeSpan.FromSeconds(120))
+            while (startup.Elapsed < timeout)
             {
                 state = await Task.Run(delegate { return Probe(); });
                 if (exiting) return;
 
                 if (ownedServer.HasExited)
                 {
+                    try { await progressReader; } catch { }
                     int exitCode = ownedServer.ExitCode;
                     StopOwnedServer();
-                    if (state == PortState.CloudCli) return;
+                    if (state == PortState.CloudCli)
+                    {
+                        UpdateStep(3, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
+                        return;
+                    }
                     if (exitCode == -1)
                     {
                         Log("wsl.exe could not start the distribution: " + distro);
@@ -1425,19 +1672,292 @@ namespace CloudCLI
                         "CloudCLI 在啟動時結束。請查看啟動器目錄下的 logs/server.log。",
                         "CloudCLI exited during startup. Check logs/server.log in the launcher folder."));
                 }
-                if (state == PortState.CloudCli) { Log("server ready after " + startup.ElapsedMilliseconds + " ms"); return; }
+                if (state == PortState.CloudCli)
+                {
+                    Log("server ready after " + startup.ElapsedMilliseconds + " ms");
+                    UpdateStep(3, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
+                    return;
+                }
                 await Task.Delay(500);
                 if (exiting) return;
             }
-            Log("server NOT ready after 120s");
-            throw new Exception(T("等待服务启动超时（2 分钟）。请查看日志 logs\\launcher.log", "已等候 2 分鐘，服務仍未就緒。請查看記錄檔 logs\\launcher.log", "Timed out after 2 minutes waiting for CloudCLI to start. Check logs\\launcher.log"));
+            Log("server NOT ready after " + (int)timeout.TotalSeconds + "s");
+            throw new Exception(T("等待服务启动超时。请查看日志 logs\\launcher.log 与 logs\\server.log", "等候服務啟動逾時。請查看記錄檔 logs\\launcher.log 與 logs\\server.log", "Timed out waiting for CloudCLI to start. Check logs\\launcher.log and logs\\server.log"));
+        }
+
+        async Task ReadServerProgressAsync(Process server, Action<int> setActiveStep)
+        {
+            if (server == null) return;
+            try
+            {
+                string line;
+                while ((line = await server.StandardOutput.ReadLineAsync()) != null)
+                {
+                    if (exiting) break;
+                    line = line.Trim();
+                    if (line == "PROGRESS:checking_cli")
+                    {
+                        setActiveStep(3);
+                        UpdateStep(3, "active", T("正在检查已安装的 CloudCLI…", "正在檢查已安裝的 CloudCLI…", "Checking installed CloudCLI…"));
+                    }
+                    else if (line == "PROGRESS:installing_cli")
+                    {
+                        setActiveStep(3);
+                        UpdateStep(3, "active", T("正在通过 npm 安装 CloudCLI 到启动器独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到啟動器獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into the launcher folder (may take 1–2 minutes)…"));
+                    }
+                    else if (line == "PROGRESS:verifying_cli")
+                    {
+                        setActiveStep(3);
+                        UpdateStep(3, "active", T("正在校验 CloudCLI 可执行文件…", "正在驗證 CloudCLI 執行檔…", "Verifying CloudCLI executable…"));
+                    }
+                    else if (line == "PROGRESS:starting_server")
+                    {
+                        UpdateStep(3, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
+                        setActiveStep(4);
+                        UpdateStep(4, "active", string.Format(T("正在端口 {0} 上启动 CloudCLI 服务…", "正在連接埠 {0} 上啟動 CloudCLI 服務…", "Starting CloudCLI server on port {0}…"), Port));
+                    }
+                }
+            }
+            catch { }
+        }
+
+        static bool ProbeWslReady(string distro)
+        {
+            return CaptureWsl(DistroArgument(distro) + " --exec /bin/sh -c \"echo ok\"") == "ok";
+        }
+
+        async Task<string> InstallWslAsync()
+        {
+            UpdateStep(1, "active", T(
+                "未检测到 WSL 发行版，正在请求管理员权限安装 WSL（Ubuntu）…",
+                "未偵測到 WSL 發行版，正在要求系統管理員權限以安裝 WSL（Ubuntu）…",
+                "No WSL distribution found. Requesting administrator permission to install WSL (Ubuntu)…"));
+            Log("starting elevated wsl --install -d Ubuntu");
+
+            Process installer;
+            try
+            {
+                installer = Process.Start(new ProcessStartInfo("wsl.exe", "--install -d Ubuntu")
+                {
+                    UseShellExecute = true,
+                    Verb = "runas"
+                });
+            }
+            catch (Win32Exception ex)
+            {
+                if (ex.NativeErrorCode == 1223)
+                    throw new InvalidOperationException(T(
+                        "你取消了安装 WSL 的管理员权限请求。请点击“继续”并允许权限提示，或在终端手动运行 wsl --install。",
+                        "你取消了安裝 WSL 的系統管理員權限要求。請點擊「繼續」並允許權限提示，或在終端機手動執行 wsl --install。",
+                        "Administrator permission for installing WSL was canceled. Click Continue and approve the prompt, or run wsl --install manually."));
+                throw new InvalidOperationException(T(
+                    "无法启动 WSL 安装程序（wsl --install）。请确认 Windows 10/11 已开启并支持 WSL 功能：",
+                    "無法啟動 WSL 安裝程式（wsl --install）。請確認 Windows 10/11 已支援 WSL 功能：",
+                    "Could not start the WSL installer (wsl --install): ") + ex.Message);
+            }
+
+            if (installer != null)
+            {
+                using (installer)
+                {
+                    UpdateStep(1, "active", T(
+                        "正在安装 WSL 与 Ubuntu（请留意弹出的系统安装窗口，完成后会自动继续）…",
+                        "正在安裝 WSL 與 Ubuntu（請留意彈出的系統安裝視窗，完成後會自動繼續）…",
+                        "Installing WSL and Ubuntu (follow any opened setup window)…"));
+                    await Task.Run(delegate { installer.WaitForExit(); });
+                    Log("wsl --install exited with code " + installer.ExitCode);
+                }
+            }
+            if (exiting) return null;
+
+            string distro = await Task.Run(delegate { return DetectDistro(); });
+            if (distro != null)
+            {
+                bool ready = await Task.Run(delegate { return ProbeWslReady(distro); });
+                if (ready) return distro;
+                throw new InvalidOperationException(string.Format(T(
+                    "WSL 发行版 {0} 已安装。如果刚弹出 Ubuntu 初始化终端，请先在其中设置 Linux 用户名与密码（若首次启用虚拟化功能请重启电脑），完成后点击“继续”。",
+                    "WSL 發行版 {0} 已安裝。如果剛彈出 Ubuntu 初次設定視窗，請先建立 Linux 使用者名稱與密碼（若首次啟用 WSL 功能請先重新啟動電腦），完成後再點擊「繼續」。",
+                    "WSL distribution {0} is installed. Complete the Ubuntu username/password setup in the terminal window (or reboot Windows if WSL was just enabled), then click Continue."), distro));
+            }
+
+            throw new InvalidOperationException(T(
+                "已运行 WSL 安装程序，但尚未检测到可用的 WSL 发行版。如果是首次开启 WSL 功能，请重启 Windows 并在重启后等待 Ubuntu 完成用户名设置，然后再点“继续”。",
+                "已執行 WSL 安裝程式，但尚未偵測到可用的 WSL 發行版。若是首次啟用 WSL 功能，請先重新啟動 Windows 並完成 Ubuntu 使用者設定後再點擊「繼續」。",
+                "The WSL installer finished, but no usable distribution is ready yet. If WSL was enabled for the first time, reboot Windows, finish Ubuntu user setup, and click Continue."));
+        }
+
+        async Task<string> InstallManagedNodeAsync(string distro)
+        {
+            UpdateStep(2, "active", T(
+                "未检测到 Node.js 22+，正在下载并安装独立版 Node.js 22 LTS 到启动器目录…",
+                "未偵測到 Node.js 22+，正在下載並安裝獨立版 Node.js 22 LTS 到啟動器目錄…",
+                "Node.js 22+ not found. Downloading isolated Node.js 22 LTS into the launcher folder…"));
+            Log("installing managed Node.js 22 LTS into data/runtime/" + distro + "/node");
+
+            string script = string.Join("\n", new[]
+            {
+                "set -eu",
+                "distro=\"$1\"",
+                "base=\"./data/runtime/$distro\"",
+                "target=\"$base/node\"",
+                "tmp=\"$base/tmp\"",
+                "mkdir -p \"$tmp\"",
+                "arch=\"$(uname -m)\"",
+                "case \"$arch\" in",
+                "  x86_64|amd64) narch=x64 ;;",
+                "  aarch64|arm64) narch=arm64 ;;",
+                "  *) echo \"Unsupported CPU architecture: $arch\" >&2; exit 2 ;;",
+                "esac",
+                "fetch() {",
+                "  if command -v curl >/dev/null 2>&1; then",
+                "    curl -fsSL \"$1\" -o \"$2\"",
+                "  elif command -v wget >/dev/null 2>&1; then",
+                "    wget -qO \"$2\" \"$1\"",
+                "  else",
+                "    echo \"Neither curl nor wget is available in WSL.\" >&2",
+                "    exit 3",
+                "  fi",
+                "}",
+                "ext=tar.gz",
+                "if command -v xz >/dev/null 2>&1; then ext=tar.xz; fi",
+                "echo \"PROGRESS:node_resolving\"",
+                "shasums=\"$tmp/SHASUMS256.txt\"",
+                "fetch \"https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt\" \"$shasums\"",
+                "line=$(grep \"node-v22\\.[0-9.]*-linux-$narch\\.$ext$\" \"$shasums\" | head -n 1 || true)",
+                "if [ -z \"$line\" ]; then echo \"Could not find Node.js v22 LTS archive for linux-$narch.$ext\" >&2; exit 4; fi",
+                "hash=$(printf '%s' \"$line\" | awk '{print $1}')",
+                "file=$(printf '%s' \"$line\" | awk '{print $2}')",
+                "ver=$(printf '%s' \"$file\" | sed -E 's/^node-(v[0-9.]+)-linux-.*/\\1/')",
+                "archive=\"$tmp/$file\"",
+                "echo \"PROGRESS:node_downloading:$ver\"",
+                "fetch \"https://nodejs.org/dist/latest-v22.x/$file\" \"$archive\"",
+                "echo \"PROGRESS:node_verifying:$ver\"",
+                "printf '%s  %s\\n' \"$hash\" \"$archive\" | sha256sum -c - >/dev/null",
+                "echo \"PROGRESS:node_extracting:$ver\"",
+                "stage=$(mktemp -d \"$tmp/node-XXXXXX\")",
+                "tar -xf \"$archive\" -C \"$stage\" --strip-components=1",
+                "rm -rf \"$target\"",
+                "mv \"$stage\" \"$target\"",
+                "rm -f \"$archive\" \"$shasums\"",
+                "\"$target/bin/node\" --version >/dev/null",
+                "\"$target/bin/npm\" --version >/dev/null",
+                "echo \"PROGRESS:node_done:$ver\"",
+                ""
+            });
+
+            var psi = new ProcessStartInfo("wsl.exe", DistroArgument(distro) + " --exec /bin/sh -s -- " + QuoteArgument(distro))
+            {
+                WorkingDirectory = AppDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+
+            var stderrBuffer = new StringBuilder();
+            using (var proc = Process.Start(psi))
+            {
+                byte[] scriptBytes = new UTF8Encoding(false).GetBytes(script);
+                proc.StandardInput.BaseStream.Write(scriptBytes, 0, scriptBytes.Length);
+                proc.StandardInput.Close();
+
+                Task errTask = Task.Run(async delegate
+                {
+                    try
+                    {
+                        string errLine;
+                        while ((errLine = await proc.StandardError.ReadLineAsync()) != null)
+                        {
+                            if (stderrBuffer.Length < 4096) stderrBuffer.AppendLine(errLine);
+                        }
+                    }
+                    catch { }
+                });
+
+                Task outTask = Task.Run(async delegate
+                {
+                    try
+                    {
+                        string outLine;
+                        while ((outLine = await proc.StandardOutput.ReadLineAsync()) != null)
+                        {
+                            if (exiting) break;
+                            outLine = outLine.Trim();
+                            if (outLine == "PROGRESS:node_resolving")
+                            {
+                                UpdateStep(2, "active", T("正在获取 Node.js 22 LTS 最新版本信息…", "正在取得 Node.js 22 LTS 最新版本資訊…", "Fetching Node.js 22 LTS release info…"));
+                            }
+                            else if (outLine.StartsWith("PROGRESS:node_downloading:"))
+                            {
+                                string ver = outLine.Substring("PROGRESS:node_downloading:".Length);
+                                UpdateStep(2, "active", string.Format(T("正在下载 Node.js {0}…", "正在下載 Node.js {0}…", "Downloading Node.js {0}…"), ver));
+                            }
+                            else if (outLine.StartsWith("PROGRESS:node_verifying:"))
+                            {
+                                string ver = outLine.Substring("PROGRESS:node_verifying:".Length);
+                                UpdateStep(2, "active", string.Format(T("正在校验 Node.js {0} SHA-256…", "正在驗證 Node.js {0} SHA-256…", "Verifying Node.js {0} SHA-256…"), ver));
+                            }
+                            else if (outLine.StartsWith("PROGRESS:node_extracting:"))
+                            {
+                                string ver = outLine.Substring("PROGRESS:node_extracting:".Length);
+                                UpdateStep(2, "active", string.Format(T("正在解压并配置 Node.js {0}…", "正在解壓並設定 Node.js {0}…", "Extracting Node.js {0}…"), ver));
+                            }
+                        }
+                    }
+                    catch { }
+                });
+
+                bool exited = await Task.Run(delegate { return proc.WaitForExit(300000); });
+                if (!exited)
+                {
+                    try { proc.Kill(); } catch { }
+                    throw new InvalidOperationException(T(
+                        "安装 Node.js 22 LTS 超时，请检查 WSL 网络后重试。",
+                        "安裝 Node.js 22 LTS 逾時，請檢查 WSL 網路後再試。",
+                        "Timed out installing Node.js 22 LTS. Check your WSL network and try again."));
+                }
+                await Task.WhenAll(outTask, errTask);
+                if (exiting) return null;
+
+                if (proc.ExitCode != 0)
+                {
+                    string errText = stderrBuffer.ToString().Trim();
+                    Log("managed node install failed (exit " + proc.ExitCode + "): " + errText);
+                    throw new InvalidOperationException(T(
+                        "自动安装 Node.js 22 LTS 失败",
+                        "自動安裝 Node.js 22 LTS 失敗",
+                        "Failed to install Node.js 22 LTS automatically")
+                        + (errText.Length > 0 ? ": " + errText : " (exit " + proc.ExitCode + ")"));
+                }
+            }
+
+            string nodePath = "./data/runtime/" + distro + "/node/bin/node";
+            string installedVersion = await Task.Run(delegate
+            {
+                return CaptureWsl(DistroArgument(distro) + " --exec " + QuoteArgument(nodePath) + " --version");
+            });
+            Version parsed;
+            if (!Version.TryParse(installedVersion.TrimStart('v'), out parsed) || parsed.Major < 22)
+            {
+                throw new InvalidOperationException(T(
+                    "已解压 Node.js，但未能通过版本校验。请查看 logs/launcher.log。",
+                    "已解壓 Node.js，但無法通過版本驗證。請查看 logs/launcher.log。",
+                    "Node.js was extracted but failed verification. Check logs/launcher.log."));
+            }
+            Log("installed managed Node.js " + installedVersion + " at " + nodePath);
+            return nodePath;
         }
 
         async Task ShowPage()
         {
-            SetStatus(T("正在加载 CloudCLI 页面…", "正在載入 CloudCLI 網頁…", "Loading CloudCLI…"));
+            UpdateStep(4, "active", T("正在加载 CloudCLI 界面…", "正在載入 CloudCLI 介面…", "Loading CloudCLI…"));
             if (!await EnsureWebViewAsync() || exiting) return;
             showingInternalPage = false;
+            showingProgressPage = false;
             web.CoreWebView2.Navigate(Url);
             Log("navigated");
             status.Visible = false;
@@ -1506,7 +2026,7 @@ namespace CloudCLI
             return value.Contains(" ") ? "\"" + value + "\"" : value;
         }
 
-        static string FindNode(string distro)
+        static string FindNode(string distro, bool allowMissing)
         {
             string prefix = DistroArgument(distro) + " --exec ";
             string versionOnPath = CaptureWsl(prefix + "/usr/bin/env node --version", expectedMissing: "node");
@@ -1556,6 +2076,17 @@ namespace CloudCLI
                 if (File.Exists(root + sibling.Replace('/', '\\'))) return candidate;
             }
             if (fallback != null) return fallback;
+
+            string managedWin = Path.Combine(AppDir, "data", "runtime", distro, "node", "bin", "node");
+            if (File.Exists(managedWin))
+            {
+                string managedRel = "./data/runtime/" + distro + "/node/bin/node";
+                string managedVer = CaptureWsl(prefix + QuoteArgument(managedRel) + " --version");
+                if (Version.TryParse(managedVer.TrimStart('v'), out parsed) && parsed.Major >= 22)
+                    return managedRel;
+            }
+
+            if (allowMissing) return null;
             if (managerFound) throw new InvalidOperationException(T("请在此发行版中启用 Node.js 22 或更高版本：",
                 "請在此發行版啟用 Node.js 22 以上版本：", "Select Node.js 22 or later in ") + distro);
             throw new InvalidOperationException(T("未找到可用的 Node.js 或版本管理工具：",
@@ -1590,6 +2121,7 @@ namespace CloudCLI
             try
             {
                 var psi = new ProcessStartInfo("wsl.exe", args);
+                psi.WorkingDirectory = AppDir;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.UseShellExecute = false;

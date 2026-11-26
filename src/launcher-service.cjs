@@ -44,8 +44,14 @@ async function run(file, args, cwd = home, environment = env) {
     });
 }
 
+function report(stage) {
+    try { process.stdout.write("PROGRESS:" + stage + "\n"); }
+    catch { /* Ignore closed stdout. */ }
+}
+
 async function main() {
     if (!["auto", "existing"].includes(mode) || !/^\d+$/.test(port) || +port < 1 || +port > 65535) return 1;
+    report("checking_cli");
     const managed = path.join(runtime, "package", "bin", "cloudcli");
     let cli = findExecutable("cloudcli");
     if (!cli && fs.existsSync(managed)) cli = managed;
@@ -53,6 +59,7 @@ async function main() {
         if (mode !== "auto") return 77;
         const npm = findExecutable("npm");
         if (!npm) return 80;
+        report("installing_cli");
         const tmp = path.join(runtime, "tmp");
         fs.mkdirSync(tmp, { recursive: true });
         const stage = fs.mkdtempSync(path.join(tmp, "install-"));
@@ -61,14 +68,17 @@ async function main() {
                 stage, { ...env, TMPDIR: tmp, npm_config_cache: path.join(runtime, "cache") });
             if (code || stopping) return 79;
             fs.accessSync(path.join(stage, "bin", "cloudcli"), fs.constants.X_OK);
+            fs.rmSync(path.join(runtime, "package"), { recursive: true, force: true });
             fs.renameSync(stage, path.join(runtime, "package"));
         } finally {
             fs.rmSync(stage, { recursive: true, force: true });
         }
         cli = managed;
     }
+    report("verifying_cli");
     const version = await run(cli, ["--version"]);
     if (version || stopping) return 1;
+    report("starting_server");
     return run(cli, ["start", "--port", port]);
 }
 
