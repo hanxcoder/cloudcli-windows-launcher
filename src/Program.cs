@@ -2115,67 +2115,6 @@ namespace CloudCLI
             Log("created and activated WSL default user: " + username);
         }
 
-        static string FindInstalledUbuntuLauncher()
-        {
-            string appsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Microsoft", "WindowsApps");
-            foreach (string exe in new[] { "ubuntu.exe", "ubuntu2404.exe", "ubuntu2204.exe", "ubuntu2004.exe", "ubuntu1804.exe" })
-            {
-                string full = Path.Combine(appsDir, exe);
-                if (File.Exists(full)) return full;
-            }
-            return null;
-        }
-
-        async Task<bool> InitializeUbuntuLauncherAsync(string ubuntuExe)
-        {
-            UpdateStep(1, "active", T(
-                "检测到已下载的 Ubuntu 发行版，正在初始化并注册到 WSL（无需重新下载）…",
-                "偵測到已下載的 Ubuntu 發行版，正在初始化並註冊到 WSL（無需重新下載）…",
-                "Detected downloaded Ubuntu package. Initializing and registering in WSL without re-downloading…"));
-            Log("initializing existing Ubuntu launcher: " + ubuntuExe);
-
-            int exitCode = await Task.Run(delegate
-            {
-                try
-                {
-                    var psi = new ProcessStartInfo(ubuntuExe, "install --root")
-                    {
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    };
-                    using (var p = Process.Start(psi))
-                    {
-                        var outTask = ReadAllBytesAsync(p.StandardOutput.BaseStream);
-                        var errTask = ReadAllBytesAsync(p.StandardError.BaseStream);
-                        if (!p.WaitForExit(180000))
-                        {
-                            try { p.Kill(); } catch { }
-                            Log("ubuntu install --root timed out");
-                            return -2;
-                        }
-                        string outText = DecodeProcessOutput(outTask.Result);
-                        string errText = DecodeProcessOutput(errTask.Result);
-                        Log("ubuntu install --root exited " + p.ExitCode
-                            + (outText.Length > 0 ? " out=" + outText : "")
-                            + (errText.Length > 0 ? " err=" + errText : ""));
-                        return p.ExitCode;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log("ubuntu install --root error: " + ex.Message);
-                    return -1;
-                }
-            });
-
-            if (exiting) return false;
-            string distro = await Task.Run(delegate { return DetectDistro(); });
-            return distro != null;
-        }
-
         async Task<string> RunElevatedWslInstallAsync(string args)
         {
             Process installer;
@@ -2219,16 +2158,6 @@ namespace CloudCLI
 
         async Task<string> InstallWslAsync()
         {
-            string existingUbuntu = FindInstalledUbuntuLauncher();
-            if (existingUbuntu != null)
-            {
-                await InitializeUbuntuLauncherAsync(existingUbuntu);
-                if (exiting) return null;
-                string initializedDistro = await Task.Run(delegate { return DetectDistro(); });
-                if (initializedDistro != null && await Task.Run(delegate { return ProbeWslReady(initializedDistro); }))
-                    return initializedDistro;
-            }
-
             UpdateStep(1, "active", T(
                 "未检测到 WSL 发行版，正在请求管理员权限安装 WSL（Ubuntu）…",
                 "未偵測到 WSL 發行版，正在要求系統管理員權限以安裝 WSL（Ubuntu）…",
@@ -2238,7 +2167,7 @@ namespace CloudCLI
             string result = await RunElevatedWslInstallAsync("--install -d Ubuntu --no-launch");
             if (exiting) return null;
 
-            if (result != "ok" && await Task.Run(delegate { return DetectDistro(); }) == null && FindInstalledUbuntuLauncher() == null)
+            if (result != "ok" && await Task.Run(delegate { return DetectDistro(); }) == null)
             {
                 Log("retrying elevated wsl --install -d Ubuntu without --no-launch");
                 await RunElevatedWslInstallAsync("--install -d Ubuntu");
@@ -2246,31 +2175,20 @@ namespace CloudCLI
             }
 
             string distro = await Task.Run(delegate { return DetectDistro(); });
-            if (distro == null)
-            {
-                string installedUbuntu = FindInstalledUbuntuLauncher();
-                if (installedUbuntu != null)
-                {
-                    await InitializeUbuntuLauncherAsync(installedUbuntu);
-                    if (exiting) return null;
-                    distro = await Task.Run(delegate { return DetectDistro(); });
-                }
-            }
-
             if (distro != null)
             {
                 bool ready = await Task.Run(delegate { return ProbeWslReady(distro); });
                 if (ready) return distro;
                 throw new InvalidOperationException(string.Format(T(
-                    "WSL 发行版 {0} 已安装，但暂无法执行 Linux 命令。如果是首次开启 WSL 功能，请重启 Windows 后再点击“继续”。",
-                    "WSL 發行版 {0} 已安裝，但暫時無法執行 Linux 命令。若是首次啟用 WSL 功能，請重新啟動 Windows 後再點擊「繼續」。",
-                    "WSL distribution {0} is installed, but cannot run Linux commands yet. If WSL was just enabled, reboot Windows and click Continue."), distro));
+                    "WSL 发行版 {0} 已安装，但暂无法执行 Linux 命令。请确认已开启 BIOS/虚拟机嵌套虚拟化（VT-x/AMD-V），如果是首次开启 WSL 功能请重启 Windows 后再点击“继续”。",
+                    "WSL 發行版 {0} 已安裝，但暫時無法執行 Linux 命令。請確認已開啟 BIOS／虛擬機巢狀虛擬化（VT-x/AMD-V），若是首次啟用 WSL 功能請重新啟動 Windows 後再點擊「繼續」。",
+                    "WSL distribution {0} is installed, but cannot run Linux commands yet. Ensure hardware/nested virtualization is enabled and reboot Windows if WSL was just enabled, then click Continue."), distro));
             }
 
             throw new InvalidOperationException(T(
-                "已运行 WSL 安装程序，但尚未检测到可用的 WSL 发行版。如果是首次开启 WSL 功能，请先重启 Windows 后再点“继续”。",
-                "已執行 WSL 安裝程式，但尚未偵測到可用的 WSL 發行版。若是首次啟用 WSL 功能，請先重新啟動 Windows 後再點擊「繼續」。",
-                "The WSL installer finished, but no usable distribution is ready yet. If WSL was enabled for the first time, reboot Windows and click Continue."));
+                "已运行 WSL 安装程序，但尚未检测到可用的 WSL 发行版。请确认已开启虚拟化支持（虚拟机需开启嵌套虚拟化），若首次开启 WSL 功能请先重启 Windows 后再点“继续”。",
+                "已執行 WSL 安裝程式，但尚未偵測到可用的 WSL 發行版。請確認已開啟虛擬化支援（虛擬機需開啟巢狀虛擬化），若首次啟用 WSL 功能請先重新啟動 Windows 後再點擊「繼續」。",
+                "The WSL installer finished, but no usable distribution is ready yet. Ensure virtualization is enabled (nested virtualization for VMs), reboot Windows if WSL was enabled for the first time, and click Continue."));
         }
 
         async Task<string> InstallManagedNodeAsync(string distro)
@@ -2507,46 +2425,6 @@ namespace CloudCLI
                 string t = line.Trim();
                 if (IsValidDistroName(t)) return t;
             }
-
-            try
-            {
-                using (var lxss = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"Software\Microsoft\Windows\CurrentVersion\Lxss"))
-                {
-                    if (lxss != null)
-                    {
-                        string defaultGuid = lxss.GetValue("DefaultDistribution") as string;
-                        if (!string.IsNullOrEmpty(defaultGuid))
-                        {
-                            using (var def = lxss.OpenSubKey(defaultGuid))
-                            {
-                                string defName = def == null ? null : (def.GetValue("DistributionName") as string);
-                                if (defName != null) defName = defName.Trim();
-                                if (IsValidDistroName(defName))
-                                {
-                                    Log("detected distro from Lxss DefaultDistribution registry: " + defName);
-                                    return defName;
-                                }
-                            }
-                        }
-                        foreach (string id in lxss.GetSubKeyNames())
-                        {
-                            using (var entry = lxss.OpenSubKey(id))
-                            {
-                                string name = entry == null ? null : (entry.GetValue("DistributionName") as string);
-                                if (name != null) name = name.Trim();
-                                if (IsValidDistroName(name))
-                                {
-                                    Log("detected distro from Lxss registry: " + name);
-                                    return name;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception e) { Log("Lxss registry probe error: " + e.Message); }
-
             return null;
         }
 
