@@ -21,11 +21,41 @@
 3. 在 Windows 安裝 Microsoft Edge WebView2 Runtime，再下載並執行 [CloudCLI-Setup-2.1.0.exe](https://github.com/hanxcoder/cloudcli-wsl-launcher/releases/download/v2.1.0/CloudCLI-Setup-2.1.0.exe)。如需立即啟動，可在安裝完成頁勾選「執行 CloudCLI」，預設不勾選。
 4. 開啟 CloudCLI。選擇「自動設定並啟動」會在畫面透過即時進度條完成背景靜默安裝 WSL、應用程式內建立 Linux 使用者，並將獨立版 Node.js 22 LTS 與 CloudCLI 安裝至 WSL 原生 ext4 目錄（預設連接埠 3001）。選擇「自訂設定或使用現有部署」可指定本機連接埠，偵測到多個開發用發行版時支援選擇 WSL 發行版（自動過濾 Docker/Rancher/Podman 等容器發行版），並支援從 `PATH` 與主流版本管理器（`nvm`、`fnm`、`volta`、`asdf`、`mise`、`nodenv`、`pnpm`、`proto`、`n`、Linuxbrew、Nix 與登入 shell 備援）偵測 Node.js 22+。如果服務由你自行管理，請取消勾選服務未執行時自動啟動的選項。連線成功後會儲存設定。
 
-> **AI 程式設計 CLI 部署**：CloudCLI 本身只是伺服器端與介面框架。若要在其中使用 **Claude Code**、**Codex CLI**、**Gemini CLI** 等代理，請於 WSL 發行版內安裝並登入對應 CLI，詳見獨立文件 [WSL 中部署 AI 程式設計 CLI 指南](docs/agent-clis.zh-TW.md)。
-
 按 `F5` 可重新載入，按 `Ctrl+I` 可開啟開發人員工具。要求開新視窗的連結會交由 Windows 處理。視窗預設採用 Windows 顯示語言，也可以在啟動前將 `CLOUDCLI_LANG` 設為 `en`、`zh-CN` 或 `zh-TW`。
 若要在背景更新，請加上 `/UPDATE` 參數執行安裝程式。更新會使用已登記的安裝目錄。如果找不到已安裝的啟動器，安裝程式會傳回結束代碼 2。
 
+## 安裝 AI 程式設計 CLI
+
+CloudCLI 只是工作環境，實際執行任務的代理（**Claude Code**、**Codex CLI**、**Gemini CLI**）需要另外安裝在 WSL 中。如果你使用的是「自動設定並啟動」，不需要安裝 PowerShell 7、nvm，也不必開啟 Linux 終端機：
+
+1. 開啟**命令提示字元**（按 `Win+R`，輸入 `cmd`，按 Enter），或從開始功能表開啟 **Windows PowerShell**。
+2. 複製要使用的工具對應的兩行指令，逐行貼上執行。第一行負責安裝，第二行啟動一次以便登入。登入完成後按 `Ctrl+C` 離開（若未離開再按一次）。
+3. 在 CloudCLI 通知區域圖示上按右鍵選擇「結束」，再重新開啟 CloudCLI，讓它偵測到新安裝的工具。
+
+**Claude Code**
+
+```
+wsl PATH=~/.local/share/cloudcli-launcher/node/bin:/usr/local/bin:/usr/bin:/bin npm install -g @anthropic-ai/claude-code
+wsl PATH=~/.local/share/cloudcli-launcher/node/bin:/usr/local/bin:/usr/bin:/bin claude
+```
+
+**Codex CLI**
+
+```
+wsl PATH=~/.local/share/cloudcli-launcher/node/bin:/usr/local/bin:/usr/bin:/bin npm install -g @openai/codex
+wsl PATH=~/.local/share/cloudcli-launcher/node/bin:/usr/local/bin:/usr/bin:/bin codex
+```
+
+**Gemini CLI**
+
+```
+wsl PATH=~/.local/share/cloudcli-launcher/node/bin:/usr/local/bin:/usr/bin:/bin npm install -g @google/gemini-cli
+wsl PATH=~/.local/share/cloudcli-launcher/node/bin:/usr/local/bin:/usr/bin:/bin gemini
+```
+
+- 這些指令會將工具安裝到啟動器準備好的 Node.js 中，CloudCLI 會自動偵測。日後要更新，重新執行安裝那一行即可。
+- 如果你在啟動器中指定了其他 WSL 發行版，請在 `wsl` 後面加上 `-d 發行版名稱`，例如 `wsl -d Debian PATH=...`。
+- 如果你自行管理 Node.js（nvm、fnm、Volta 等），請在 WSL 終端機中安裝，詳見 [WSL 中部署 AI 程式設計 CLI 指南](docs/agent-clis.zh-TW.md)。
 
 ## 服務與資料
 

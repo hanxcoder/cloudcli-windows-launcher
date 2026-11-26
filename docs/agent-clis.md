@@ -17,7 +17,7 @@ node --version
 npm --version
 ```
 
-> **Note**: If you used the launcher's **Set it up for me** option on a fresh WSL distribution, the launcher installs an isolated Node.js runtime under `~/.local/share/cloudcli-launcher/` inside WSL so it does not touch your shell configuration. To install global CLI tools like Claude Code or Codex in WSL, install Node.js 22+ in your WSL user environment (for example with `nvm`) first.
+> **Note**: If you used the launcher's **Set it up for me** option, the launcher installs an isolated Node.js runtime under `~/.local/share/cloudcli-launcher/` inside WSL without touching your shell configuration. You can install the CLIs into that runtime straight from Command Prompt or Windows PowerShell with the copy-and-paste commands in the [README](../README.md#install-ai-coding-clis). The steps below are for users who manage Node.js themselves.
 
 ---
 

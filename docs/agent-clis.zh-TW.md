@@ -17,7 +17,7 @@ node --version
 npm --version
 ```
 
-> **提示**：如果你在全新的 WSL 環境中使用啟動器的「自動設定並啟動」完成初始化，啟動器會將獨立版 Node.js 安裝於 WSL 內的 `~/.local/share/cloudcli-launcher/` 目錄下，不會更動你的 shell 設定。若要在 WSL 內全域安裝 Claude Code、Codex 等 CLI，請先在你的 WSL 使用者環境安裝 Node.js 22+（例如透過 `nvm`）。
+> **提示**：如果你使用的是啟動器的「自動設定並啟動」，啟動器會將獨立版 Node.js 安裝於 WSL 內的 `~/.local/share/cloudcli-launcher/` 目錄下，不會更動你的 shell 設定。可以直接在命令提示字元或 Windows PowerShell 中複製 [README](../readme_zh-TW.md#安裝-ai-程式設計-cli) 裡的指令，將 CLI 安裝到這個 Node.js。以下步驟適用於自行管理 Node.js 的使用者。
 
 ---
 
