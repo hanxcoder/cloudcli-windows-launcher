@@ -108,8 +108,8 @@ namespace CloudCLI
         bool showingInternalPage;
         bool showingProgressPage;
         bool setupSubmitting;
-        readonly string[] stepStates = new string[5];
-        readonly string[] stepDetails = new string[5];
+        readonly string[] stepStates = new string[4];
+        readonly string[] stepDetails = new string[4];
         sealed class WslUserChoice { public bool Skip; public string Username; public string Password; }
         TaskCompletionSource<WslUserChoice> wslUserTcs;
 
@@ -634,7 +634,6 @@ namespace CloudCLI
                 : T("正在连接并检查 WSL 服务状态", "正在連線並檢查 WSL 服務狀態", "Connecting and verifying your WSL service");
             string[] titles = new[]
             {
-                T("检查本机端口与现有服务", "檢查本機連接埠與現有服務", "Check local port & existing service"),
                 T("检查并准备 WSL 环境", "檢查並準備 WSL 環境", "Check & prepare WSL"),
                 T("检查并准备 Node.js 22+ 与 npm", "檢查並準備 Node.js 22+ 與 npm", "Check & prepare Node.js 22+ & npm"),
                 T("检查并准备 CloudCLI", "檢查並準備 CloudCLI", "Check & prepare CloudCLI"),
@@ -1289,9 +1288,9 @@ namespace CloudCLI
 
         async Task StartFromWindowAsync(bool configure)
         {
-            string initialText = T("正在检查本机端口与现有服务…", "正在檢查本機連接埠與現有服務…", "Checking local port and existing service…");
+            string initialText = T("正在启动 CloudCLI…", "正在啟動 CloudCLI…", "Starting CloudCLI…");
             ResetProgress();
-            ShowProgress(initialText);
+            ShowProgress("");
             status.Text = initialText;
             await BootAsync(configure);
             if (!connected && !exiting) ShowSetup(status.Text);
@@ -1779,17 +1778,12 @@ namespace CloudCLI
             int activeStep = 0;
             try
             {
-                UpdateStep(0, "active", string.Format(T(
-                    "正在检测本机端口 {0}…", "正在偵測本機連接埠 {0}…", "Checking local port {0}…"), Port));
                 PortState state = await Task.Run(delegate { return Probe(); });
                 if (exiting) return;
                 if (state != PortState.Available && state != PortState.CloudCli) throw PortCheckError(state);
 
                 if (state == PortState.Available)
                 {
-                    UpdateStep(0, "done", string.Format(T(
-                        "端口 {0} 可用", "連接埠 {0} 可用", "Port {0} is available"), Port));
-                    activeStep = 1;
                     if (setupMode == "connect") throw new InvalidOperationException(T(
                         "请先启动已有的 CloudCLI 服务，然后重试。", "請先啟動現有的 CloudCLI 服務，再試一次。",
                         "Start your CloudCLI service, then try again."));
@@ -1798,11 +1792,10 @@ namespace CloudCLI
                 else
                 {
                     Log("using existing CloudCLI server");
-                    string reused = T("已检测到运行中的 CloudCLI 服务", "已偵測到執行中的 CloudCLI 服務", "Existing CloudCLI service detected");
-                    UpdateStep(0, "done", reused);
-                    UpdateStep(1, "done", T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)"));
-                    UpdateStep(2, "done", T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)"));
-                    UpdateStep(3, "done", T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)"));
+                    string skipped = T("已跳过（复用现有服务）", "已略過（共用現有服務）", "Skipped (using running service)");
+                    UpdateStep(0, "done", skipped);
+                    UpdateStep(1, "done", skipped);
+                    UpdateStep(2, "done", skipped);
                 }
                 if (configure && !exiting) SaveSetup();
             }
@@ -1824,8 +1817,8 @@ namespace CloudCLI
 
         async Task StartServerAsync(Action<int> setActiveStep)
         {
-            setActiveStep(1);
-            UpdateStep(1, "active", T("正在检测已安装的 WSL 发行版…", "正在偵測已安裝的 WSL 發行版…", "Detecting WSL distribution…"));
+            setActiveStep(0);
+            UpdateStep(0, "active", T("正在检测已安装的 WSL 发行版…", "正在偵測已安裝的 WSL 發行版…", "Detecting WSL distribution…"));
             string distro = await Task.Run(delegate { return DetectDistro(); });
             if (exiting) return;
             if (distro == null)
@@ -1861,7 +1854,7 @@ namespace CloudCLI
                 createdUser = await EnsureWslUserAsync(distro);
                 if (exiting) return;
             }
-            UpdateStep(1, "done", createdUser != null
+            UpdateStep(0, "done", createdUser != null
                 ? string.Format(T("已就绪（{0} · 用户 {1}）", "已就緒（{0} · 使用者 {1}）", "Ready ({0} · user {1})"), distro, createdUser)
                 : string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), distro));
 
@@ -1870,8 +1863,8 @@ namespace CloudCLI
             if (exiting || state == PortState.CloudCli) return;
             if (state != PortState.Available) throw PortCheckError(state);
 
-            setActiveStep(2);
-            UpdateStep(2, "active", T("正在检查 WSL 中的 Node.js 22+ 与 npm…", "正在檢查 WSL 中的 Node.js 22+ 與 npm…", "Checking Node.js 22+ and npm in WSL…"));
+            setActiveStep(1);
+            UpdateStep(1, "active", T("正在检查 WSL 中的 Node.js 22+ 与 npm…", "正在檢查 WSL 中的 Node.js 22+ 與 npm…", "Checking Node.js 22+ and npm in WSL…"));
             var discovery = Stopwatch.StartNew();
             string node = await Task.Run(delegate { return FindNode(distro, setupMode == "auto"); });
             if (exiting) return;
@@ -1881,7 +1874,7 @@ namespace CloudCLI
                 if (exiting) return;
             }
             Log("Selected Node.js after " + discovery.ElapsedMilliseconds + " ms: " + node);
-            UpdateStep(2, "done", node == "node"
+            UpdateStep(1, "done", node == "node"
                 ? T("已就绪（系统 PATH 中的 Node.js）", "已就緒（系統 PATH 中的 Node.js）", "Ready (Node.js on PATH)")
                 : string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), node));
 
@@ -1889,8 +1882,8 @@ namespace CloudCLI
             if (exiting || state == PortState.CloudCli) return;
             if (state != PortState.Available) throw PortCheckError(state);
 
-            setActiveStep(3);
-            UpdateStep(3, "active", T("正在检查 WSL 中的 CloudCLI…", "正在檢查 WSL 中的 CloudCLI…", "Checking CloudCLI in WSL…"));
+            setActiveStep(2);
+            UpdateStep(2, "active", T("正在检查 WSL 中的 CloudCLI…", "正在檢查 WSL 中的 CloudCLI…", "Checking CloudCLI in WSL…"));
             var processInfo = new ProcessStartInfo("wsl.exe", DistroArgument(distro)
                 + " --exec " + QuoteArgument(node) + " ./launcher-service.cjs " + setupMode + " " + Port)
             {
@@ -1918,7 +1911,7 @@ namespace CloudCLI
                     StopOwnedServer();
                     if (state == PortState.CloudCli)
                     {
-                        UpdateStep(3, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
+                        UpdateStep(2, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
                         return;
                     }
                     if (exitCode == -1)
@@ -1954,7 +1947,7 @@ namespace CloudCLI
                 if (state == PortState.CloudCli)
                 {
                     Log("server ready after " + startup.ElapsedMilliseconds + " ms");
-                    UpdateStep(3, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
+                    UpdateStep(2, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
                     return;
                 }
                 await Task.Delay(500);
@@ -1976,24 +1969,24 @@ namespace CloudCLI
                     line = line.Trim();
                     if (line == "PROGRESS:checking_cli")
                     {
-                        setActiveStep(3);
-                        UpdateStep(3, "active", T("正在检查已安装的 CloudCLI…", "正在檢查已安裝的 CloudCLI…", "Checking installed CloudCLI…"));
+                        setActiveStep(2);
+                        UpdateStep(2, "active", T("正在检查已安装的 CloudCLI…", "正在檢查已安裝的 CloudCLI…", "Checking installed CloudCLI…"));
                     }
                     else if (line == "PROGRESS:installing_cli")
                     {
-                        setActiveStep(3);
-                        UpdateStep(3, "active", T("正在通过 npm 安装 CloudCLI 到启动器独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到啟動器獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into the launcher folder (may take 1–2 minutes)…"));
+                        setActiveStep(2);
+                        UpdateStep(2, "active", T("正在通过 npm 安装 CloudCLI 到启动器独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到啟動器獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into the launcher folder (may take 1–2 minutes)…"));
                     }
                     else if (line == "PROGRESS:verifying_cli")
                     {
-                        setActiveStep(3);
-                        UpdateStep(3, "active", T("正在校验 CloudCLI 可执行文件…", "正在驗證 CloudCLI 執行檔…", "Verifying CloudCLI executable…"));
+                        setActiveStep(2);
+                        UpdateStep(2, "active", T("正在校验 CloudCLI 可执行文件…", "正在驗證 CloudCLI 執行檔…", "Verifying CloudCLI executable…"));
                     }
                     else if (line == "PROGRESS:starting_server")
                     {
-                        UpdateStep(3, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
-                        setActiveStep(4);
-                        UpdateStep(4, "active", string.Format(T("正在端口 {0} 上启动 CloudCLI 服务…", "正在連接埠 {0} 上啟動 CloudCLI 服務…", "Starting CloudCLI server on port {0}…"), Port));
+                        UpdateStep(2, "done", T("CloudCLI 已就绪", "CloudCLI 已就緒", "CloudCLI ready"));
+                        setActiveStep(3);
+                        UpdateStep(3, "active", T("正在启动 CloudCLI 服务…", "正在啟動 CloudCLI 服務…", "Starting CloudCLI server…"));
                     }
                 }
             }
@@ -2036,7 +2029,7 @@ namespace CloudCLI
                 }
 
                 string msg = string.Format(T("正在为 {0} 创建 Linux 用户 {1}…", "正在為 {0} 建立 Linux 使用者 {1}…", "Creating Linux user {1} in {0}…"), distro, choice.Username);
-                UpdateStep(1, "active", msg);
+                UpdateStep(0, "active", msg);
                 ShowProgress(msg);
 
                 try
@@ -2144,7 +2137,7 @@ namespace CloudCLI
             {
                 using (installer)
                 {
-                    UpdateStep(1, "active", T(
+                    UpdateStep(0, "active", T(
                         "正在安装 WSL 与 Ubuntu（请留意弹出的系统安装窗口，完成后会自动继续）…",
                         "正在安裝 WSL 與 Ubuntu（請留意彈出的系統安裝視窗，完成後會自動繼續）…",
                         "Installing WSL and Ubuntu (follow any opened setup window)…"));
@@ -2158,7 +2151,7 @@ namespace CloudCLI
 
         async Task<string> InstallWslAsync()
         {
-            UpdateStep(1, "active", T(
+            UpdateStep(0, "active", T(
                 "未检测到 WSL 发行版，正在请求管理员权限安装 WSL（Ubuntu）…",
                 "未偵測到 WSL 發行版，正在要求系統管理員權限以安裝 WSL（Ubuntu）…",
                 "No WSL distribution found. Requesting administrator permission to install WSL (Ubuntu)…"));
@@ -2193,7 +2186,7 @@ namespace CloudCLI
 
         async Task<string> InstallManagedNodeAsync(string distro)
         {
-            UpdateStep(2, "active", T(
+            UpdateStep(1, "active", T(
                 "未检测到 Node.js 22+，正在下载并安装独立版 Node.js 22 LTS 到启动器目录…",
                 "未偵測到 Node.js 22+，正在下載並安裝獨立版 Node.js 22 LTS 到啟動器目錄…",
                 "Node.js 22+ not found. Downloading isolated Node.js 22 LTS into the launcher folder…"));
@@ -2293,22 +2286,22 @@ namespace CloudCLI
                             outLine = outLine.Trim();
                             if (outLine == "PROGRESS:node_resolving")
                             {
-                                UpdateStep(2, "active", T("正在获取 Node.js 22 LTS 最新版本信息…", "正在取得 Node.js 22 LTS 最新版本資訊…", "Fetching Node.js 22 LTS release info…"));
+                                UpdateStep(1, "active", T("正在获取 Node.js 22 LTS 最新版本信息…", "正在取得 Node.js 22 LTS 最新版本資訊…", "Fetching Node.js 22 LTS release info…"));
                             }
                             else if (outLine.StartsWith("PROGRESS:node_downloading:"))
                             {
                                 string ver = outLine.Substring("PROGRESS:node_downloading:".Length);
-                                UpdateStep(2, "active", string.Format(T("正在下载 Node.js {0}…", "正在下載 Node.js {0}…", "Downloading Node.js {0}…"), ver));
+                                UpdateStep(1, "active", string.Format(T("正在下载 Node.js {0}…", "正在下載 Node.js {0}…", "Downloading Node.js {0}…"), ver));
                             }
                             else if (outLine.StartsWith("PROGRESS:node_verifying:"))
                             {
                                 string ver = outLine.Substring("PROGRESS:node_verifying:".Length);
-                                UpdateStep(2, "active", string.Format(T("正在校验 Node.js {0} SHA-256…", "正在驗證 Node.js {0} SHA-256…", "Verifying Node.js {0} SHA-256…"), ver));
+                                UpdateStep(1, "active", string.Format(T("正在校验 Node.js {0} SHA-256…", "正在驗證 Node.js {0} SHA-256…", "Verifying Node.js {0} SHA-256…"), ver));
                             }
                             else if (outLine.StartsWith("PROGRESS:node_extracting:"))
                             {
                                 string ver = outLine.Substring("PROGRESS:node_extracting:".Length);
-                                UpdateStep(2, "active", string.Format(T("正在解压并配置 Node.js {0}…", "正在解壓並設定 Node.js {0}…", "Extracting Node.js {0}…"), ver));
+                                UpdateStep(1, "active", string.Format(T("正在解压并配置 Node.js {0}…", "正在解壓並設定 Node.js {0}…", "Extracting Node.js {0}…"), ver));
                             }
                         }
                     }
@@ -2358,7 +2351,7 @@ namespace CloudCLI
 
         async Task ShowPage()
         {
-            UpdateStep(4, "active", T("正在加载 CloudCLI 界面…", "正在載入 CloudCLI 介面…", "Loading CloudCLI…"));
+            UpdateStep(3, "active", T("正在加载 CloudCLI 界面…", "正在載入 CloudCLI 介面…", "Loading CloudCLI…"));
             if (!await EnsureWebViewAsync() || exiting) return;
             showingInternalPage = false;
             showingProgressPage = false;
