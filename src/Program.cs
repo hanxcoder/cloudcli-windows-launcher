@@ -110,6 +110,7 @@ namespace CloudCLI
         bool setupSubmitting;
         readonly string[] stepStates = new string[4];
         readonly string[] stepDetails = new string[4];
+        readonly int[] stepPercents = new[] { -1, -1, -1, -1 };
         sealed class WslUserChoice { public bool Skip; public string Username; public string Password; }
         TaskCompletionSource<WslUserChoice> wslUserTcs;
 
@@ -265,6 +266,7 @@ namespace CloudCLI
             {
                 stepStates[i] = "pending";
                 stepDetails[i] = "";
+                stepPercents[i] = -1;
             }
         }
 
@@ -535,12 +537,35 @@ namespace CloudCLI
                 {
                     stepStates[index] = state ?? "pending";
                     stepDetails[index] = detail ?? "";
+                    if (stepStates[index] == "done" || stepStates[index] == "error" || stepStates[index] == "pending")
+                        stepPercents[index] = -1;
                     if (!string.IsNullOrEmpty(detail)) status.Text = detail;
                     if (webReady && showingInternalPage && showingProgressPage && web != null && web.CoreWebView2 != null)
                     {
                         web.CoreWebView2.ExecuteScriptAsync("window.__setStep && window.__setStep("
                             + index.ToString(CultureInfo.InvariantCulture) + ",'"
                             + JsEscape(stepStates[index]) + "','" + JsEscape(stepDetails[index]) + "');");
+                    }
+                };
+                if (InvokeRequired) BeginInvoke(apply);
+                else apply();
+            }
+            catch { }
+        }
+
+        void UpdateStepProgress(int index, int percent)
+        {
+            if (index < 0 || index >= stepPercents.Length) return;
+            try
+            {
+                Action apply = delegate
+                {
+                    stepPercents[index] = percent;
+                    if (webReady && showingInternalPage && showingProgressPage && web != null && web.CoreWebView2 != null)
+                    {
+                        web.CoreWebView2.ExecuteScriptAsync("window.__setStepProgress && window.__setStepProgress("
+                            + index.ToString(CultureInfo.InvariantCulture) + ","
+                            + percent.ToString(CultureInfo.InvariantCulture) + ");");
                     }
                 };
                 if (InvokeRequired) BeginInvoke(apply);
@@ -559,6 +584,12 @@ namespace CloudCLI
                   .Append(i.ToString(CultureInfo.InvariantCulture)).Append(",'")
                   .Append(JsEscape(stepStates[i] ?? "pending")).Append("','")
                   .Append(JsEscape(stepDetails[i] ?? "")).Append("');");
+                if (stepPercents[i] != -1)
+                {
+                    sb.Append("window.__setStepProgress && window.__setStepProgress(")
+                      .Append(i.ToString(CultureInfo.InvariantCulture)).Append(",")
+                      .Append(stepPercents[i].ToString(CultureInfo.InvariantCulture)).Append(");");
+                }
             }
             web.CoreWebView2.ExecuteScriptAsync(sb.ToString());
         }
@@ -653,8 +684,12 @@ namespace CloudCLI
                     .Append("<svg class=\"icon-error\" width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\"><path d=\"M7 7L17 17M17 7L7 17\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"/></svg>")
                     .Append("</div>")
                     .Append("<div class=\"step-body\">")
+                    .Append("<div class=\"step-title-row\">")
                     .Append("<div class=\"step-title\">").Append(Html(titles[i])).Append("</div>")
+                    .Append("<div class=\"step-meta\" id=\"step-meta-").Append(i).Append("\"></div>")
+                    .Append("</div>")
                     .Append("<div class=\"step-detail\" id=\"step-detail-").Append(i).Append("\">").Append(Html(detail)).Append("</div>")
+                    .Append("<div class=\"subbar\" id=\"subbar-").Append(i).Append("\"><div class=\"subbar-fill\" id=\"subbar-fill-").Append(i).Append("\"></div></div>")
                     .Append("</div></div>");
             }
 
@@ -765,7 +800,21 @@ namespace CloudCLI
                 }
                 @keyframes spin { to { transform: rotate(360deg); } }
                 .step-body { flex: 1; min-width: 0; }
+                .step-title-row {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 10px;
+                }
                 .step-title { font-size: 13.8px; font-weight: 500; color: var(--text); }
+                .step-meta {
+                    font-size: 11.5px;
+                    font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+                    font-variant-numeric: tabular-nums;
+                    color: #93c5fd;
+                    flex-shrink: 0;
+                }
+                .step-meta:empty { display: none; }
                 .step-detail {
                     font-size: 12.2px;
                     color: var(--text-secondary);
@@ -776,6 +825,31 @@ namespace CloudCLI
                 }
                 .step-detail:empty { display: none; }
                 .step.error .step-detail { color: var(--danger-text); }
+                .subbar {
+                    display: none;
+                    height: 4px;
+                    border-radius: 999px;
+                    background: rgba(255, 255, 255, 0.08);
+                    overflow: hidden;
+                    margin-top: 8px;
+                }
+                .subbar.show { display: block; }
+                .subbar-fill {
+                    height: 100%;
+                    width: 0%;
+                    border-radius: 999px;
+                    background: linear-gradient(90deg, #3b82f6, #60a5fa);
+                    transition: width 0.25s ease;
+                }
+                .subbar-fill.indeterminate {
+                    width: 38%;
+                    background: linear-gradient(90deg, transparent, #3b82f6, #60a5fa, transparent);
+                    animation: subslide 1.35s ease-in-out infinite;
+                }
+                @keyframes subslide {
+                    0% { transform: translateX(-110%); }
+                    100% { transform: translateX(280%); }
+                }
                 </style></head><body>
                 <main class=""card"">
                     <div class=""header"">
@@ -789,29 +863,98 @@ namespace CloudCLI
                     <div class=""steps"">" + stepsHtml.ToString() + @"</div>
                 </main>
                 <script>
+                    var stepPct = [-1, -1, -1, -1];
+                    var stepStartTs = {};
+
+                    function formatElapsed(ms) {
+                        var sec = Math.max(0, Math.floor(ms / 1000));
+                        var m = Math.floor(sec / 60);
+                        var s = sec % 60;
+                        return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+                    }
+
+                    function renderMeta(idx) {
+                        var el = document.getElementById('step-' + idx);
+                        var meta = document.getElementById('step-meta-' + idx);
+                        if (!el || !meta) return;
+                        if (!el.classList.contains('active')) {
+                            meta.textContent = '';
+                            return;
+                        }
+                        var p = stepPct[idx];
+                        var parts = [];
+                        if (p >= 0 && p <= 100) parts.push(p + '%');
+                        if (stepStartTs[idx]) parts.push(formatElapsed(Date.now() - stepStartTs[idx]));
+                        meta.textContent = parts.join(' · ');
+                    }
+
                     function refreshBar() {
                         var steps = document.querySelectorAll('.step');
                         var score = 0;
                         for (var i = 0; i < steps.length; i++) {
                             if (steps[i].classList.contains('done')) score += 1;
-                            else if (steps[i].classList.contains('active')) score += 0.45;
+                            else if (steps[i].classList.contains('active')) {
+                                var p = stepPct[i];
+                                score += (p >= 0 && p <= 100) ? (0.15 + 0.8 * (p / 100)) : 0.45;
+                            }
                         }
                         var pct = Math.max(8, Math.min(100, Math.round((score / steps.length) * 100)));
                         var fill = document.getElementById('barFill');
                         if (fill) fill.style.width = pct + '%';
                     }
+
                     window.__setStep = function(idx, state, detail) {
                         var el = document.getElementById('step-' + idx);
                         var d = document.getElementById('step-detail-' + idx);
                         if (!el) return;
-                        el.className = 'step ' + (state || 'pending');
+                        var nextState = state || 'pending';
+                        el.className = 'step ' + nextState;
                         if (d) d.textContent = detail || '';
+                        if (nextState !== 'active') {
+                            stepPct[idx] = -1;
+                            delete stepStartTs[idx];
+                            var bar = document.getElementById('subbar-' + idx);
+                            if (bar) bar.classList.remove('show');
+                        } else if (!stepStartTs[idx]) {
+                            stepStartTs[idx] = Date.now();
+                        }
+                        renderMeta(idx);
                         refreshBar();
                     };
+
+                    window.__setStepProgress = function(idx, pct) {
+                        var bar = document.getElementById('subbar-' + idx);
+                        var fill = document.getElementById('subbar-fill-' + idx);
+                        if (!bar || !fill) return;
+                        stepPct[idx] = pct;
+                        if (pct === -1) {
+                            bar.classList.remove('show');
+                            fill.classList.remove('indeterminate');
+                            fill.style.width = '0%';
+                        } else if (pct === -2) {
+                            if (!stepStartTs[idx]) stepStartTs[idx] = Date.now();
+                            bar.classList.add('show');
+                            fill.classList.add('indeterminate');
+                            fill.style.width = '';
+                        } else {
+                            var clamped = Math.max(0, Math.min(100, pct));
+                            if (!stepStartTs[idx]) stepStartTs[idx] = Date.now();
+                            bar.classList.add('show');
+                            fill.classList.remove('indeterminate');
+                            fill.style.width = clamped + '%';
+                        }
+                        renderMeta(idx);
+                        refreshBar();
+                    };
+
                     window.__setStatus = function(t) {
                         var active = document.querySelector('.step.active .step-detail');
                         if (active) active.textContent = t || '';
                     };
+
+                    setInterval(function() {
+                        for (var i = 0; i < 4; i++) renderMeta(i);
+                    }, 1000);
                     refreshBar();
                 </script></body></html>";
         }
@@ -1986,6 +2129,7 @@ namespace CloudCLI
                         setInstallingCli(true);
                         setActiveStep(2);
                         UpdateStep(2, "active", T("正在通过 npm 安装 CloudCLI 到 WSL 独立目录（首次可能需要 1–2 分钟）…", "正在透過 npm 安裝 CloudCLI 到 WSL 獨立目錄（首次可能需要 1–2 分鐘）…", "Installing CloudCLI via npm into WSL isolated folder (may take 1–2 minutes)…"));
+                        UpdateStepProgress(2, -2);
                     }
                     else if (line == "PROGRESS:verifying_cli")
                     {
@@ -2185,11 +2329,12 @@ namespace CloudCLI
 
             var result = new WslInstallResult();
             string defaultStatus = T(
-                "正在后台安装 WSL 与 Ubuntu（请稍候）…",
-                "正在背景安裝 WSL 與 Ubuntu（請稍候）…",
-                "Installing WSL and Ubuntu in the background…");
+                "正在后台下载并安装 WSL 与 Ubuntu（镜像较大，可能需要几分钟，请耐心等待）…",
+                "正在背景下載並安裝 WSL 與 Ubuntu（映像較大，可能需要幾分鐘，請耐心等候）…",
+                "Downloading and installing WSL & Ubuntu in the background (may take several minutes)…");
             string lastShown = defaultStatus;
             UpdateStep(0, "active", defaultStatus);
+            UpdateStepProgress(0, -2);
 
             try
             {
@@ -2202,10 +2347,21 @@ namespace CloudCLI
                             if (exiting) break;
                             string _;
                             string latest = ReadLatestLogLine(logPath, out _);
-                            if (!string.IsNullOrEmpty(latest) && latest != lastShown)
+                            if (!string.IsNullOrEmpty(latest))
                             {
-                                lastShown = latest;
-                                UpdateStep(0, "active", latest);
+                                Match pctMatch = Regex.Match(latest, @"(\d{1,3})(?:\.\d+)?%");
+                                int pct;
+                                if (pctMatch.Success && int.TryParse(pctMatch.Groups[1].Value, out pct))
+                                    UpdateStepProgress(0, Math.Max(0, Math.Min(100, pct)));
+                                else
+                                    UpdateStepProgress(0, -2);
+
+                                string display = pctMatch.Success ? latest : latest + T("（镜像较大，请耐心等待）", "（映像較大，請耐心等候）", " (this may take a few minutes)");
+                                if (display != lastShown)
+                                {
+                                    lastShown = display;
+                                    UpdateStep(0, "active", display);
+                                }
                             }
                             await Task.Delay(400);
                         }
@@ -2266,6 +2422,7 @@ namespace CloudCLI
                 "未检测到 Node.js 22+，正在下载并安装独立版 Node.js 22 LTS…",
                 "未偵測到 Node.js 22+，正在下載並安裝獨立版 Node.js 22 LTS…",
                 "Node.js 22+ not found. Downloading isolated Node.js 22 LTS…"));
+            UpdateStepProgress(1, -2);
             Log("installing managed Node.js 22 LTS into ~/.local/share/cloudcli-launcher/node in " + distro);
 
             string script = string.Join("\n", new[]
@@ -2301,9 +2458,30 @@ namespace CloudCLI
                 "hash=$(printf '%s' \"$line\" | awk '{print $1}')",
                 "file=$(printf '%s' \"$line\" | awk '{print $2}')",
                 "ver=$(printf '%s' \"$file\" | sed -E 's/^node-(v[0-9.]+)-linux-.*/\\1/')",
+                "url=\"https://nodejs.org/dist/latest-v22.x/$file\"",
                 "archive=\"$tmp/$file\"",
-                "echo \"PROGRESS:node_downloading:$ver\"",
-                "fetch \"https://nodejs.org/dist/latest-v22.x/$file\" \"$archive\"",
+                "total=0",
+                "if command -v curl >/dev/null 2>&1; then",
+                "  total=$(curl -fsSLI \"$url\" 2>/dev/null | awk 'tolower($1)==\"content-length:\"{v=$2} END{gsub(/\\r/,\"\",v); print v+0}' || echo 0)",
+                "fi",
+                "rm -f \"$archive\"",
+                "echo \"PROGRESS:node_dl:$ver:0:0:$total\"",
+                "fetch \"$url\" \"$archive\" &",
+                "fp=$!",
+                "while kill -0 \"$fp\" 2>/dev/null; do",
+                "  cur=$(stat -c%s \"$archive\" 2>/dev/null || echo 0)",
+                "  if [ \"$total\" -gt 0 ] 2>/dev/null; then",
+                "    pct=$((cur * 100 / total))",
+                "    [ \"$pct\" -gt 100 ] && pct=100",
+                "  else",
+                "    pct=-2",
+                "  fi",
+                "  echo \"PROGRESS:node_dl:$ver:$pct:$cur:$total\"",
+                "  sleep 0.5",
+                "done",
+                "wait \"$fp\"",
+                "cur=$(stat -c%s \"$archive\" 2>/dev/null || echo 0)",
+                "if [ \"$total\" -gt 0 ] 2>/dev/null; then echo \"PROGRESS:node_dl:$ver:100:$cur:$total\"; fi",
                 "echo \"PROGRESS:node_verifying:$ver\"",
                 "printf '%s  %s\\n' \"$hash\" \"$archive\" | sha256sum -c - >/dev/null",
                 "echo \"PROGRESS:node_extracting:$ver\"",
@@ -2361,21 +2539,48 @@ namespace CloudCLI
                             outLine = outLine.Trim();
                             if (outLine == "PROGRESS:node_resolving")
                             {
+                                UpdateStepProgress(1, -2);
                                 UpdateStep(1, "active", T("正在获取 Node.js 22 LTS 最新版本信息…", "正在取得 Node.js 22 LTS 最新版本資訊…", "Fetching Node.js 22 LTS release info…"));
                             }
-                            else if (outLine.StartsWith("PROGRESS:node_downloading:"))
+                            else if (outLine.StartsWith("PROGRESS:node_dl:"))
                             {
-                                string ver = outLine.Substring("PROGRESS:node_downloading:".Length);
-                                UpdateStep(1, "active", string.Format(T("正在下载 Node.js {0}…", "正在下載 Node.js {0}…", "Downloading Node.js {0}…"), ver));
+                                string[] p = outLine.Substring("PROGRESS:node_dl:".Length).Split(':');
+                                if (p.Length == 4)
+                                {
+                                    string ver = p[0];
+                                    int pct;
+                                    long curBytes, totalBytes;
+                                    if (!int.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out pct)) pct = -2;
+                                    long.TryParse(p[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out curBytes);
+                                    long.TryParse(p[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out totalBytes);
+                                    UpdateStepProgress(1, pct);
+                                    if (totalBytes > 0)
+                                    {
+                                        string curMb = (curBytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture);
+                                        string totMb = (totalBytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture);
+                                        UpdateStep(1, "active", string.Format(T("正在下载 Node.js {0} · {1} / {2} MB", "正在下載 Node.js {0} · {1} / {2} MB", "Downloading Node.js {0} · {1} / {2} MB"), ver, curMb, totMb));
+                                    }
+                                    else if (curBytes > 0)
+                                    {
+                                        string curMb = (curBytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture);
+                                        UpdateStep(1, "active", string.Format(T("正在下载 Node.js {0} · {1} MB", "正在下載 Node.js {0} · {1} MB", "Downloading Node.js {0} · {1} MB"), ver, curMb));
+                                    }
+                                    else
+                                    {
+                                        UpdateStep(1, "active", string.Format(T("正在下载 Node.js {0}…", "正在下載 Node.js {0}…", "Downloading Node.js {0}…"), ver));
+                                    }
+                                }
                             }
                             else if (outLine.StartsWith("PROGRESS:node_verifying:"))
                             {
                                 string ver = outLine.Substring("PROGRESS:node_verifying:".Length);
+                                UpdateStepProgress(1, -2);
                                 UpdateStep(1, "active", string.Format(T("正在校验 Node.js {0} SHA-256…", "正在驗證 Node.js {0} SHA-256…", "Verifying Node.js {0} SHA-256…"), ver));
                             }
                             else if (outLine.StartsWith("PROGRESS:node_extracting:"))
                             {
                                 string ver = outLine.Substring("PROGRESS:node_extracting:".Length);
+                                UpdateStepProgress(1, -2);
                                 UpdateStep(1, "active", string.Format(T("正在解压并配置 Node.js {0}…", "正在解壓並設定 Node.js {0}…", "Extracting Node.js {0}…"), ver));
                             }
                         }
