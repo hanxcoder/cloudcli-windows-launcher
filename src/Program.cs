@@ -110,6 +110,8 @@ namespace CloudCLI
         bool setupSubmitting;
         readonly string[] stepStates = new string[5];
         readonly string[] stepDetails = new string[5];
+        sealed class WslUserChoice { public bool Skip; public string Username; public string Password; }
+        TaskCompletionSource<WslUserChoice> wslUserTcs;
 
         async Task<bool> EnsureWebViewAsync()
         {
@@ -189,11 +191,37 @@ namespace CloudCLI
 
         async Task HandleWebMessageAsync(CoreWebView2WebMessageReceivedEventArgs ev)
         {
-            if (exiting || connected || !showingInternalPage || setupSubmitting) return;
+            if (exiting || connected || !showingInternalPage) return;
             string message;
             try { message = ev.TryGetWebMessageAsString(); }
             catch { return; }
             if (string.IsNullOrEmpty(message)) return;
+
+            var pendingUser = wslUserTcs;
+            if (pendingUser != null)
+            {
+                if (message == "wsluser-skip")
+                {
+                    wslUserTcs = null;
+                    pendingUser.TrySetResult(new WslUserChoice { Skip = true });
+                    return;
+                }
+                if (message.StartsWith("wsluser|"))
+                {
+                    string rest = message.Substring("wsluser|".Length);
+                    int sep = rest.IndexOf('|');
+                    if (sep <= 0) return;
+                    string user = rest.Substring(0, sep);
+                    string pass = rest.Substring(sep + 1);
+                    if (!Regex.IsMatch(user, "^[a-z_][a-z0-9_-]{0,31}$") || user == "root") return;
+                    if (string.IsNullOrEmpty(pass) || pass.IndexOfAny(new[] { '\r', '\n', '\0' }) >= 0) return;
+                    wslUserTcs = null;
+                    pendingUser.TrySetResult(new WslUserChoice { Username = user, Password = pass });
+                    return;
+                }
+            }
+
+            if (setupSubmitting) return;
 
             string[] parts = message.Split('|');
             if (parts.Length != 3 || parts[0] != "submit") return;
@@ -242,8 +270,11 @@ namespace CloudCLI
 
         void ShowProgress(string initialDetail)
         {
-            stepStates[0] = "active";
-            stepDetails[0] = initialDetail ?? "";
+            if (string.IsNullOrEmpty(stepStates[0]) || stepStates[0] == "pending")
+            {
+                stepStates[0] = "active";
+                stepDetails[0] = initialDetail ?? "";
+            }
             if (!webReady || web == null || web.CoreWebView2 == null)
             {
                 SetStatus(initialDetail);
@@ -255,6 +286,244 @@ namespace CloudCLI
             web.Visible = true;
             web.BringToFront();
             web.CoreWebView2.NavigateToString(BuildProgressHtml());
+        }
+
+        void ShowWslUserSetup(string distro, string error)
+        {
+            if (!webReady || web == null || web.CoreWebView2 == null) return;
+            showingInternalPage = true;
+            showingProgressPage = false;
+            status.Visible = false;
+            web.Visible = true;
+            web.BringToFront();
+            web.CoreWebView2.NavigateToString(BuildWslUserHtml(distro, error));
+            web.Focus();
+        }
+
+        string BuildWslUserHtml(string distro, string error)
+        {
+            string title = T("创建 WSL Linux 用户", "建立 WSL Linux 使用者", "Create WSL Linux user");
+            string subtitle = string.Format(T(
+                "发行版 {0} 已安装完成，目前仅有 root 账户。请设置一个日常使用的 Linux 用户名和密码（之后可直接用它管理代码与登录工具）。",
+                "發行版 {0} 已安裝完成，目前僅有 root 帳戶。請設定一個日常使用的 Linux 使用者名稱與密碼。",
+                "Distribution {0} is installed and currently only has root. Create a standard Linux user account to run CloudCLI and your coding CLIs."), distro);
+            string userLabel = T("Linux 用户名", "Linux 使用者名稱", "Linux username");
+            string userHint = T("小写字母或下划线开头，支持小写字母、数字、- 和 _", "小寫字母或底線開頭，支援小寫字母、數字、- 與 _", "Start with a-z or _; lowercase letters, digits, - and _");
+            string userErrText = T("请输入有效的 Linux 用户名（不能为 root）", "請輸入有效的 Linux 使用者名稱（不可為 root）", "Enter a valid Linux username (cannot be root)");
+            string passLabel = T("密码", "密碼", "Password");
+            string passConfirmLabel = T("确认密码", "確認密碼", "Confirm password");
+            string passErrText = T("密码不能为空", "密碼不可為空", "Password is required");
+            string mismatchText = T("两次输入的密码不一致", "兩次輸入的密碼不一致", "Passwords do not match");
+            string submitText = T("创建用户并继续", "建立使用者並繼續", "Create user & continue");
+            string creatingText = T("正在创建…", "正在建立…", "Creating…");
+            string skipText = T("跳过，暂用 root 继续", "略過，暫以 root 繼續", "Skip (continue as root)");
+
+            string errorHtml = "";
+            if (!string.IsNullOrEmpty(error))
+            {
+                errorHtml = @"<div class=""alert"" role=""alert"">
+                    <svg class=""alert-icon"" width=""18"" height=""18"" viewBox=""0 0 24 24"" fill=""none"">
+                        <circle cx=""12"" cy=""12"" r=""9.5"" stroke=""#f87171"" stroke-width=""1.8""/>
+                        <path d=""M12 7.5V12.5"" stroke=""#f87171"" stroke-width=""1.8"" stroke-linecap=""round""/>
+                        <circle cx=""12"" cy=""16.2"" r=""1"" fill=""#f87171""/>
+                    </svg>
+                    <div class=""alert-text"">" + Html(error) + @"</div>
+                </div>";
+            }
+
+            return "<!DOCTYPE html><html lang=\"" + LangName() + "\"><head><meta charset=\"utf-8\">"
+                + "<style>" + SharedCss() + @"
+                .card {
+                    margin: auto;
+                    width: 100%;
+                    max-width: 480px;
+                    background: var(--surface);
+                    border: 1px solid var(--border);
+                    border-radius: 20px;
+                    padding: 30px;
+                    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+                }
+                .header {
+                    display: flex;
+                    align-items: center;
+                    gap: 14px;
+                    margin-bottom: 18px;
+                }
+                .logo {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 12px;
+                    background: linear-gradient(145deg, rgba(59, 130, 246, 0.2), rgba(99, 102, 241, 0.08));
+                    border: 1px solid rgba(96, 165, 250, 0.28);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    flex-shrink: 0;
+                }
+                .title { font-size: 19px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+                .subtitle { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px; }
+                .alert {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 10px;
+                    background: var(--danger-bg);
+                    border: 1px solid var(--danger-border);
+                    border-radius: 12px;
+                    padding: 12px 14px;
+                    margin-bottom: 18px;
+                }
+                .alert-icon { flex-shrink: 0; margin-top: 1px; }
+                .alert-text {
+                    font-size: 13px;
+                    line-height: 1.55;
+                    color: var(--danger-text);
+                    user-select: text;
+                    word-break: break-word;
+                }
+                .fields { display: flex; flex-direction: column; gap: 14px; }
+                .field { display: flex; flex-direction: column; gap: 6px; }
+                .label { font-size: 13px; font-weight: 500; color: var(--text); }
+                .hint { font-size: 11.5px; color: var(--text-muted); }
+                .input {
+                    width: 100%;
+                    height: 40px;
+                    padding: 0 12px;
+                    border-radius: 10px;
+                    border: 1px solid var(--border-strong);
+                    background: #0d0e12;
+                    color: var(--text);
+                    font-size: 14px;
+                    outline: none;
+                    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+                }
+                .input:focus {
+                    border-color: var(--accent);
+                    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+                }
+                .input.invalid {
+                    border-color: #ef4444;
+                    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+                }
+                .err { display: none; font-size: 12px; color: var(--danger-text); }
+                .err.show { display: block; }
+                .actions { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
+                .btn {
+                    width: 100%;
+                    height: 42px;
+                    border: none;
+                    border-radius: 12px;
+                    background: var(--accent);
+                    color: #fff;
+                    font-size: 14px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: background 0.15s ease, opacity 0.15s ease;
+                }
+                .btn:hover:not(:disabled) { background: var(--accent-hover); }
+                .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+                .btn-ghost {
+                    width: 100%;
+                    height: 36px;
+                    border: 1px solid var(--border);
+                    border-radius: 10px;
+                    background: transparent;
+                    color: var(--text-secondary);
+                    font-size: 13px;
+                    cursor: pointer;
+                    transition: background 0.15s ease, color 0.15s ease;
+                }
+                .btn-ghost:hover:not(:disabled) { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+                .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+                </style></head><body>
+                <main class=""card"">
+                    <div class=""header"">
+                        <div class=""logo"">" + LogoSvg() + @"</div>
+                        <h1 class=""title"">" + Html(title) + @"</h1>
+                    </div>
+                    <p class=""subtitle"">" + Html(subtitle) + @"</p>
+                    " + errorHtml + @"
+                    <div class=""fields"">
+                        <div class=""field"">
+                            <label class=""label"" for=""uInput"">" + Html(userLabel) + @"</label>
+                            <input class=""input"" id=""uInput"" type=""text"" placeholder=""ubuntu"" autocomplete=""off"" spellcheck=""false"" />
+                            <div class=""hint"">" + Html(userHint) + @"</div>
+                            <div class=""err"" id=""uErr"">" + Html(userErrText) + @"</div>
+                        </div>
+                        <div class=""field"">
+                            <label class=""label"" for=""pInput"">" + Html(passLabel) + @"</label>
+                            <input class=""input"" id=""pInput"" type=""password"" />
+                            <div class=""err"" id=""pErr"">" + Html(passErrText) + @"</div>
+                        </div>
+                        <div class=""field"">
+                            <label class=""label"" for=""p2Input"">" + Html(passConfirmLabel) + @"</label>
+                            <input class=""input"" id=""p2Input"" type=""password"" />
+                            <div class=""err"" id=""p2Err"">" + Html(mismatchText) + @"</div>
+                        </div>
+                    </div>
+                    <div class=""actions"">
+                        <button class=""btn"" id=""createBtn"" type=""button"">" + Html(submitText) + @"</button>
+                        <button class=""btn-ghost"" id=""skipBtn"" type=""button"">" + Html(skipText) + @"</button>
+                    </div>
+                </main>
+                <script>
+                    var uInput = document.getElementById('uInput');
+                    var pInput = document.getElementById('pInput');
+                    var p2Input = document.getElementById('p2Input');
+                    var uErr = document.getElementById('uErr');
+                    var pErr = document.getElementById('pErr');
+                    var p2Err = document.getElementById('p2Err');
+                    var createBtn = document.getElementById('createBtn');
+                    var skipBtn = document.getElementById('skipBtn');
+                    var busy = false;
+
+                    function validUser() {
+                        var u = (uInput.value || '').trim();
+                        return /^[a-z_][a-z0-9_-]{0,31}$/.test(u) && u !== 'root';
+                    }
+
+                    uInput.addEventListener('input', function() {
+                        var ok = validUser();
+                        uInput.classList.toggle('invalid', !ok);
+                        uErr.classList.toggle('show', !ok);
+                    });
+
+                    function submitUser() {
+                        if (busy) return;
+                        var u = (uInput.value || '').trim();
+                        var p = pInput.value || '';
+                        var p2 = p2Input.value || '';
+                        var okU = validUser();
+                        var okP = p.length > 0 && p.indexOf('\n') === -1 && p.indexOf('\r') === -1;
+                        var okP2 = p === p2;
+                        uInput.classList.toggle('invalid', !okU);
+                        uErr.classList.toggle('show', !okU);
+                        pInput.classList.toggle('invalid', !okP);
+                        pErr.classList.toggle('show', !okP);
+                        p2Input.classList.toggle('invalid', !okP2);
+                        p2Err.classList.toggle('show', !okP2);
+                        if (!okU) { uInput.focus(); return; }
+                        if (!okP) { pInput.focus(); return; }
+                        if (!okP2) { p2Input.focus(); return; }
+                        busy = true;
+                        createBtn.disabled = true;
+                        skipBtn.disabled = true;
+                        createBtn.textContent = '" + JsEscape(creatingText) + @"';
+                        window.chrome.webview.postMessage('wsluser|' + u + '|' + p);
+                    }
+
+                    createBtn.addEventListener('click', submitUser);
+                    skipBtn.addEventListener('click', function() {
+                        if (busy) return;
+                        busy = true;
+                        createBtn.disabled = true;
+                        skipBtn.disabled = true;
+                        window.chrome.webview.postMessage('wsluser-skip');
+                    });
+                    document.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter') { e.preventDefault(); submitUser(); }
+                    });
+                    uInput.focus();
+                </script></body></html>";
         }
 
         void UpdateStep(int index, string state, string detail)
@@ -1462,6 +1731,8 @@ namespace CloudCLI
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             exiting = true;
+            var pendingUser = wslUserTcs;
+            if (pendingUser != null) pendingUser.TrySetCanceled();
             serviceMonitor.Dispose();
             tray.Visible = false;
             tray.Dispose();
@@ -1584,7 +1855,15 @@ namespace CloudCLI
                 }
             }
             Log("distro: " + distro);
-            UpdateStep(1, "done", string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), distro));
+            string createdUser = null;
+            if (setupMode == "auto")
+            {
+                createdUser = await EnsureWslUserAsync(distro);
+                if (exiting) return;
+            }
+            UpdateStep(1, "done", createdUser != null
+                ? string.Format(T("已就绪（{0} · 用户 {1}）", "已就緒（{0} · 使用者 {1}）", "Ready ({0} · user {1})"), distro, createdUser)
+                : string.Format(T("已就绪（{0}）", "已就緒（{0}）", "Ready ({0})"), distro));
 
             // WSL may have started a service while the distribution was detected.
             PortState state = await Task.Run(delegate { return Probe(); });
@@ -1726,18 +2005,183 @@ namespace CloudCLI
             return CaptureWsl(DistroArgument(distro) + " --exec /bin/sh -c \"echo ok\"") == "ok";
         }
 
-        async Task<string> InstallWslAsync()
+        static bool NeedsLinuxUserSetup(string distro)
+        {
+            string res = CaptureWsl(DistroArgument(distro)
+                + " --exec /bin/sh -c \"id -un; awk -F: '\\$3>=1000 && \\$3<65534 {print \\$1}' /etc/passwd | head -n 1\"");
+            string[] lines = res.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            if (lines.Length == 0) return false;
+            return lines[0].Trim() == "root" && lines.Length == 1;
+        }
+
+        async Task<string> EnsureWslUserAsync(string distro)
+        {
+            bool needsUser = await Task.Run(delegate { return NeedsLinuxUserSetup(distro); });
+            if (!needsUser || exiting) return null;
+
+            string lastError = null;
+            while (!exiting)
+            {
+                wslUserTcs = new TaskCompletionSource<WslUserChoice>();
+                ShowWslUserSetup(distro, lastError);
+                WslUserChoice choice;
+                try { choice = await wslUserTcs.Task; }
+                catch (OperationCanceledException) { return null; }
+                finally { wslUserTcs = null; }
+
+                if (exiting || choice == null || choice.Skip)
+                {
+                    ShowProgress(T("跳过创建普通用户，继续部署…", "略過建立一般使用者，繼續部署…", "Skipping Linux user setup, continuing…"));
+                    return null;
+                }
+
+                string msg = string.Format(T("正在为 {0} 创建 Linux 用户 {1}…", "正在為 {0} 建立 Linux 使用者 {1}…", "Creating Linux user {1} in {0}…"), distro, choice.Username);
+                UpdateStep(1, "active", msg);
+                ShowProgress(msg);
+
+                try
+                {
+                    await CreateWslUserAsync(distro, choice.Username, choice.Password);
+                    return choice.Username;
+                }
+                catch (Exception ex)
+                {
+                    Log("create wsl user failed: " + ex.Message);
+                    lastError = ex.Message;
+                }
+            }
+            return null;
+        }
+
+        async Task CreateWslUserAsync(string distro, string username, string password)
+        {
+            if (!Regex.IsMatch(username, "^[a-z_][a-z0-9_-]{0,31}$") || username == "root")
+                throw new InvalidOperationException(T("无效的 Linux 用户名。", "無效的 Linux 使用者名稱。", "Invalid Linux username."));
+
+            string shScript = "set -eu; u=\"$1\"; IFS= read -r p; "
+                + "if ! id -u \"$u\" >/dev/null 2>&1; then useradd -m -s /bin/bash \"$u\"; fi; "
+                + "if getent group sudo >/dev/null 2>&1; then usermod -aG sudo \"$u\"; fi; "
+                + "printf '%s:%s\\n' \"$u\" \"$p\" | chpasswd; "
+                + "if [ -f /etc/wsl.conf ]; then "
+                + "awk -v u=\"$u\" 'BEGIN{in_u=0;done=0} /^\\[/{if(in_u && !done){print \"default=\" u; done=1} in_u=($0==\"[user]\")} "
+                + "{if(in_u && $0 ~ /^default[[:space:]]*=/){if(!done){print \"default=\" u; done=1} next} print} "
+                + "END{if(!done){if(!in_u) print \"[user]\"; print \"default=\" u}}' /etc/wsl.conf > /etc/wsl.conf.tmp "
+                + "&& mv /etc/wsl.conf.tmp /etc/wsl.conf; "
+                + "else printf '[user]\\ndefault=%s\\n' \"$u\" > /etc/wsl.conf; fi";
+
+            var psi = new ProcessStartInfo("wsl.exe", DistroArgument(distro)
+                + " -u root --exec /bin/sh -c \"" + shScript.Replace("\"", "\\\"") + "\" -- " + QuoteArgument(username))
+            {
+                WorkingDirectory = AppDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+
+            string errDetail = "";
+            int exitCode = await Task.Run(delegate
+            {
+                using (var p = Process.Start(psi))
+                {
+                    byte[] passBytes = new UTF8Encoding(false).GetBytes(password + "\n");
+                    p.StandardInput.BaseStream.Write(passBytes, 0, passBytes.Length);
+                    p.StandardInput.Close();
+                    var outTask = ReadAllBytesAsync(p.StandardOutput.BaseStream);
+                    var errTask = ReadAllBytesAsync(p.StandardError.BaseStream);
+                    if (!p.WaitForExit(30000))
+                    {
+                        try { p.Kill(); } catch { }
+                        return -2;
+                    }
+                    errDetail = DecodeProcessOutput(errTask.Result);
+                    if (errDetail.Length == 0) errDetail = DecodeProcessOutput(outTask.Result);
+                    return p.ExitCode;
+                }
+            });
+
+            if (exitCode != 0)
+                throw new InvalidOperationException(T("创建 Linux 用户失败", "建立 Linux 使用者失敗", "Failed to create Linux user")
+                    + (errDetail.Length > 0 ? ": " + errDetail : " (exit " + exitCode + ")"));
+
+            await Task.Run(delegate { CaptureWsl("--terminate " + QuoteArgument(distro)); });
+            string activeUser = await Task.Run(delegate { return CaptureWsl(DistroArgument(distro) + " --exec /usr/bin/id -un"); });
+            if (activeUser != username)
+                throw new InvalidOperationException(T(
+                    "用户已创建但未能切换为默认用户，请手动检查 /etc/wsl.conf。",
+                    "使用者已建立但無法切換為預設使用者，請手動檢查 /etc/wsl.conf。",
+                    "User was created, but failed to become the default WSL user."));
+            Log("created and activated WSL default user: " + username);
+        }
+
+        static string FindInstalledUbuntuLauncher()
+        {
+            string appsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft", "WindowsApps");
+            foreach (string exe in new[] { "ubuntu.exe", "ubuntu2404.exe", "ubuntu2204.exe", "ubuntu2004.exe", "ubuntu1804.exe" })
+            {
+                string full = Path.Combine(appsDir, exe);
+                if (File.Exists(full)) return full;
+            }
+            return null;
+        }
+
+        async Task<bool> InitializeUbuntuLauncherAsync(string ubuntuExe)
         {
             UpdateStep(1, "active", T(
-                "未检测到 WSL 发行版，正在请求管理员权限安装 WSL（Ubuntu）…",
-                "未偵測到 WSL 發行版，正在要求系統管理員權限以安裝 WSL（Ubuntu）…",
-                "No WSL distribution found. Requesting administrator permission to install WSL (Ubuntu)…"));
-            Log("starting elevated wsl --install -d Ubuntu");
+                "检测到已下载的 Ubuntu 发行版，正在初始化并注册到 WSL（无需重新下载）…",
+                "偵測到已下載的 Ubuntu 發行版，正在初始化並註冊到 WSL（無需重新下載）…",
+                "Detected downloaded Ubuntu package. Initializing and registering in WSL without re-downloading…"));
+            Log("initializing existing Ubuntu launcher: " + ubuntuExe);
 
+            int exitCode = await Task.Run(delegate
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo(ubuntuExe, "install --root")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    using (var p = Process.Start(psi))
+                    {
+                        var outTask = ReadAllBytesAsync(p.StandardOutput.BaseStream);
+                        var errTask = ReadAllBytesAsync(p.StandardError.BaseStream);
+                        if (!p.WaitForExit(180000))
+                        {
+                            try { p.Kill(); } catch { }
+                            Log("ubuntu install --root timed out");
+                            return -2;
+                        }
+                        string outText = DecodeProcessOutput(outTask.Result);
+                        string errText = DecodeProcessOutput(errTask.Result);
+                        Log("ubuntu install --root exited " + p.ExitCode
+                            + (outText.Length > 0 ? " out=" + outText : "")
+                            + (errText.Length > 0 ? " err=" + errText : ""));
+                        return p.ExitCode;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("ubuntu install --root error: " + ex.Message);
+                    return -1;
+                }
+            });
+
+            if (exiting) return false;
+            string distro = await Task.Run(delegate { return DetectDistro(); });
+            return distro != null;
+        }
+
+        async Task<string> RunElevatedWslInstallAsync(string args)
+        {
             Process installer;
             try
             {
-                installer = Process.Start(new ProcessStartInfo("wsl.exe", "--install -d Ubuntu")
+                installer = Process.Start(new ProcessStartInfo("wsl.exe", args)
                 {
                     UseShellExecute = true,
                     Verb = "runas"
@@ -1756,6 +2200,7 @@ namespace CloudCLI
                     "Could not start the WSL installer (wsl --install): ") + ex.Message);
             }
 
+            int exitCode = 0;
             if (installer != null)
             {
                 using (installer)
@@ -1765,26 +2210,67 @@ namespace CloudCLI
                         "正在安裝 WSL 與 Ubuntu（請留意彈出的系統安裝視窗，完成後會自動繼續）…",
                         "Installing WSL and Ubuntu (follow any opened setup window)…"));
                     await Task.Run(delegate { installer.WaitForExit(); });
-                    Log("wsl --install exited with code " + installer.ExitCode);
+                    exitCode = installer.ExitCode;
+                    Log("wsl " + args + " exited with code " + exitCode);
                 }
             }
+            return exitCode == 0 ? "ok" : "exit:" + exitCode;
+        }
+
+        async Task<string> InstallWslAsync()
+        {
+            string existingUbuntu = FindInstalledUbuntuLauncher();
+            if (existingUbuntu != null)
+            {
+                await InitializeUbuntuLauncherAsync(existingUbuntu);
+                if (exiting) return null;
+                string initializedDistro = await Task.Run(delegate { return DetectDistro(); });
+                if (initializedDistro != null && await Task.Run(delegate { return ProbeWslReady(initializedDistro); }))
+                    return initializedDistro;
+            }
+
+            UpdateStep(1, "active", T(
+                "未检测到 WSL 发行版，正在请求管理员权限安装 WSL（Ubuntu）…",
+                "未偵測到 WSL 發行版，正在要求系統管理員權限以安裝 WSL（Ubuntu）…",
+                "No WSL distribution found. Requesting administrator permission to install WSL (Ubuntu)…"));
+            Log("starting elevated wsl --install -d Ubuntu --no-launch");
+
+            string result = await RunElevatedWslInstallAsync("--install -d Ubuntu --no-launch");
             if (exiting) return null;
 
+            if (result != "ok" && await Task.Run(delegate { return DetectDistro(); }) == null && FindInstalledUbuntuLauncher() == null)
+            {
+                Log("retrying elevated wsl --install -d Ubuntu without --no-launch");
+                await RunElevatedWslInstallAsync("--install -d Ubuntu");
+                if (exiting) return null;
+            }
+
             string distro = await Task.Run(delegate { return DetectDistro(); });
+            if (distro == null)
+            {
+                string installedUbuntu = FindInstalledUbuntuLauncher();
+                if (installedUbuntu != null)
+                {
+                    await InitializeUbuntuLauncherAsync(installedUbuntu);
+                    if (exiting) return null;
+                    distro = await Task.Run(delegate { return DetectDistro(); });
+                }
+            }
+
             if (distro != null)
             {
                 bool ready = await Task.Run(delegate { return ProbeWslReady(distro); });
                 if (ready) return distro;
                 throw new InvalidOperationException(string.Format(T(
-                    "WSL 发行版 {0} 已安装。如果刚弹出 Ubuntu 初始化终端，请先在其中设置 Linux 用户名与密码（若首次启用虚拟化功能请重启电脑），完成后点击“继续”。",
-                    "WSL 發行版 {0} 已安裝。如果剛彈出 Ubuntu 初次設定視窗，請先建立 Linux 使用者名稱與密碼（若首次啟用 WSL 功能請先重新啟動電腦），完成後再點擊「繼續」。",
-                    "WSL distribution {0} is installed. Complete the Ubuntu username/password setup in the terminal window (or reboot Windows if WSL was just enabled), then click Continue."), distro));
+                    "WSL 发行版 {0} 已安装，但暂无法执行 Linux 命令。如果是首次开启 WSL 功能，请重启 Windows 后再点击“继续”。",
+                    "WSL 發行版 {0} 已安裝，但暫時無法執行 Linux 命令。若是首次啟用 WSL 功能，請重新啟動 Windows 後再點擊「繼續」。",
+                    "WSL distribution {0} is installed, but cannot run Linux commands yet. If WSL was just enabled, reboot Windows and click Continue."), distro));
             }
 
             throw new InvalidOperationException(T(
-                "已运行 WSL 安装程序，但尚未检测到可用的 WSL 发行版。如果是首次开启 WSL 功能，请重启 Windows 并在重启后等待 Ubuntu 完成用户名设置，然后再点“继续”。",
-                "已執行 WSL 安裝程式，但尚未偵測到可用的 WSL 發行版。若是首次啟用 WSL 功能，請先重新啟動 Windows 並完成 Ubuntu 使用者設定後再點擊「繼續」。",
-                "The WSL installer finished, but no usable distribution is ready yet. If WSL was enabled for the first time, reboot Windows, finish Ubuntu user setup, and click Continue."));
+                "已运行 WSL 安装程序，但尚未检测到可用的 WSL 发行版。如果是首次开启 WSL 功能，请先重启 Windows 后再点“继续”。",
+                "已執行 WSL 安裝程式，但尚未偵測到可用的 WSL 發行版。若是首次啟用 WSL 功能，請先重新啟動 Windows 後再點擊「繼續」。",
+                "The WSL installer finished, but no usable distribution is ready yet. If WSL was enabled for the first time, reboot Windows and click Continue."));
         }
 
         async Task<string> InstallManagedNodeAsync(string distro)
@@ -2002,20 +2488,65 @@ namespace CloudCLI
             catch { }
         }
 
+        static bool IsValidDistroName(string name)
+        {
+            if (string.IsNullOrEmpty(name) || name.Length > 64 || name.StartsWith("-")) return false;
+            foreach (char c in name)
+            {
+                if (c > 127 || !(char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.' || c == ' '))
+                    return false;
+            }
+            return true;
+        }
+
         static string DetectDistro()
         {
-            string raw = CaptureWsl("-l -q").Replace("\0", "").Trim();
+            string raw = CaptureWsl("-l -q").Replace("\uFEFF", "").Replace("\0", "").Trim();
             foreach (string line in raw.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 string t = line.Trim();
-                if (t.Length == 0 || t.Length > 64 || t.StartsWith("-")) continue;
-                bool ok = true;
-                foreach (char c in t)
-                {
-                    if (!(char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.' || c == ' ')) { ok = false; break; }
-                }
-                if (ok) return t;
+                if (IsValidDistroName(t)) return t;
             }
+
+            try
+            {
+                using (var lxss = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Lxss"))
+                {
+                    if (lxss != null)
+                    {
+                        string defaultGuid = lxss.GetValue("DefaultDistribution") as string;
+                        if (!string.IsNullOrEmpty(defaultGuid))
+                        {
+                            using (var def = lxss.OpenSubKey(defaultGuid))
+                            {
+                                string defName = def == null ? null : (def.GetValue("DistributionName") as string);
+                                if (defName != null) defName = defName.Trim();
+                                if (IsValidDistroName(defName))
+                                {
+                                    Log("detected distro from Lxss DefaultDistribution registry: " + defName);
+                                    return defName;
+                                }
+                            }
+                        }
+                        foreach (string id in lxss.GetSubKeyNames())
+                        {
+                            using (var entry = lxss.OpenSubKey(id))
+                            {
+                                string name = entry == null ? null : (entry.GetValue("DistributionName") as string);
+                                if (name != null) name = name.Trim();
+                                if (IsValidDistroName(name))
+                                {
+                                    Log("detected distro from Lxss registry: " + name);
+                                    return name;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e) { Log("Lxss registry probe error: " + e.Message); }
+
             return null;
         }
 
@@ -2115,6 +2646,28 @@ namespace CloudCLI
                 "Could not find the registered WSL distribution: ") + distro);
         }
 
+        static async Task<byte[]> ReadAllBytesAsync(Stream stream)
+        {
+            using (var ms = new MemoryStream())
+            {
+                await stream.CopyToAsync(ms);
+                return ms.ToArray();
+            }
+        }
+
+        static string DecodeProcessOutput(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) return "";
+            string text;
+            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+                text = Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
+            else if (Array.IndexOf(bytes, (byte)0) >= 0)
+                text = Encoding.Unicode.GetString(bytes);
+            else
+                text = Encoding.UTF8.GetString(bytes);
+            return text.Replace("\uFEFF", "").Replace("\0", "").Trim();
+        }
+
         static string CaptureWsl(string args, string expectedMissing = null)
         {
             var timer = Stopwatch.StartNew();
@@ -2128,15 +2681,16 @@ namespace CloudCLI
                 psi.CreateNoWindow = true;
                 using (var p = Process.Start(psi))
                 {
-                    var output = p.StandardOutput.ReadToEndAsync();
-                    var errors = p.StandardError.ReadToEndAsync();
+                    var output = ReadAllBytesAsync(p.StandardOutput.BaseStream);
+                    var errors = ReadAllBytesAsync(p.StandardError.BaseStream);
                     if (!p.WaitForExit(20000))
                     {
                         Log("WSL probe timed out after " + timer.ElapsedMilliseconds + " ms: " + args);
                         p.Kill();
                         return "";
                     }
-                    string detail = errors.Result.Replace("\0", "").Trim();
+                    string outText = DecodeProcessOutput(output.Result);
+                    string detail = DecodeProcessOutput(errors.Result);
                     string context = args + " (exit " + p.ExitCode + ", " + timer.ElapsedMilliseconds + " ms)";
                     if (expectedMissing != null && p.ExitCode == 127)
                     {
@@ -2145,12 +2699,12 @@ namespace CloudCLI
                     }
                     if (p.ExitCode != 0)
                     {
-                        if (detail.Length == 0) detail = output.Result.Replace("\0", "").Trim();
+                        if (detail.Length == 0) detail = outText;
                         Log("WSL probe failed: " + context + (detail.Length == 0 ? "" : " - " + detail));
                         return "";
                     }
                     Log("WSL probe completed: " + context);
-                    return output.Result.Replace("\0", "").Trim();
+                    return outText;
                 }
             }
             catch (Exception e) { Log("WSL probe error after " + timer.ElapsedMilliseconds + " ms: " + args + " - " + e.Message); return ""; }
