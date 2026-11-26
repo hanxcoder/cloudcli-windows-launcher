@@ -2108,19 +2108,58 @@ namespace CloudCLI
             Log("created and activated WSL default user: " + username);
         }
 
-        async Task<string> RunElevatedWslInstallAsync(string args)
+        sealed class WslInstallResult
         {
+            public int ExitCode;
+            public string Output;
+        }
+
+        static string ReadLatestLogLine(string logPath, out string fullText)
+        {
+            fullText = "";
+            if (!File.Exists(logPath)) return "";
+            try
+            {
+                byte[] bytes;
+                using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var ms = new MemoryStream())
+                {
+                    fs.CopyTo(ms);
+                    bytes = ms.ToArray();
+                }
+                fullText = DecodeProcessOutput(bytes);
+                if (string.IsNullOrEmpty(fullText)) return "";
+                string[] lines = fullText.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int i = lines.Length - 1; i >= 0; i--)
+                {
+                    string line = lines[i].Trim();
+                    if (line.Length > 0)
+                        return line.Length > 140 ? line.Substring(0, 140) + "…" : line;
+                }
+            }
+            catch { }
+            return "";
+        }
+
+        async Task<WslInstallResult> RunElevatedWslInstallAsync(string args)
+        {
+            string batchPath = Path.Combine(Path.GetTempPath(), "cloudcli-wsl-" + Guid.NewGuid().ToString("N") + ".cmd");
+            string logPath = Path.ChangeExtension(batchPath, ".log");
+            File.WriteAllText(batchPath, "@echo off\r\nwsl.exe " + args + " > \"%~dpn0.log\" 2>&1\r\nexit /b %ERRORLEVEL%\r\n", Encoding.Default);
+
             Process installer;
             try
             {
-                installer = Process.Start(new ProcessStartInfo("wsl.exe", args)
+                installer = Process.Start(new ProcessStartInfo("cmd.exe", "/d /c \"" + batchPath + "\"")
                 {
                     UseShellExecute = true,
-                    Verb = "runas"
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden
                 });
             }
             catch (Win32Exception ex)
             {
+                try { File.Delete(batchPath); } catch { }
                 if (ex.NativeErrorCode == 1223)
                     throw new InvalidOperationException(T(
                         "你取消了安装 WSL 的管理员权限请求。请点击“继续”并允许权限提示，或在终端手动运行 wsl --install。",
@@ -2132,40 +2171,65 @@ namespace CloudCLI
                     "Could not start the WSL installer (wsl --install): ") + ex.Message);
             }
 
-            int exitCode = 0;
-            if (installer != null)
+            var result = new WslInstallResult();
+            string defaultStatus = T(
+                "正在后台安装 WSL 与 Ubuntu（请稍候）…",
+                "正在背景安裝 WSL 與 Ubuntu（請稍候）…",
+                "Installing WSL and Ubuntu in the background…");
+            string lastShown = defaultStatus;
+            UpdateStep(0, "active", defaultStatus);
+
+            try
             {
-                using (installer)
+                if (installer != null)
                 {
-                    UpdateStep(0, "active", T(
-                        "正在安装 WSL 与 Ubuntu（请留意弹出的系统安装窗口，完成后会自动继续）…",
-                        "正在安裝 WSL 與 Ubuntu（請留意彈出的系統安裝視窗，完成後會自動繼續）…",
-                        "Installing WSL and Ubuntu (follow any opened setup window)…"));
-                    await Task.Run(delegate { installer.WaitForExit(); });
-                    exitCode = installer.ExitCode;
-                    Log("wsl " + args + " exited with code " + exitCode);
+                    using (installer)
+                    {
+                        while (!installer.HasExited)
+                        {
+                            if (exiting) break;
+                            string _;
+                            string latest = ReadLatestLogLine(logPath, out _);
+                            if (!string.IsNullOrEmpty(latest) && latest != lastShown)
+                            {
+                                lastShown = latest;
+                                UpdateStep(0, "active", latest);
+                            }
+                            await Task.Delay(400);
+                        }
+                        if (!exiting)
+                        {
+                            installer.WaitForExit();
+                            result.ExitCode = installer.ExitCode;
+                        }
+                    }
                 }
+
+                string fullLog;
+                ReadLatestLogLine(logPath, out fullLog);
+                result.Output = fullLog;
+                Log("wsl " + args + " exited with code " + result.ExitCode
+                    + (string.IsNullOrEmpty(fullLog) ? "" : " output=" + fullLog.Replace("\r", " ").Replace("\n", " | ")));
             }
-            return exitCode == 0 ? "ok" : "exit:" + exitCode;
+            finally
+            {
+                try { File.Delete(batchPath); } catch { }
+                try { File.Delete(logPath); } catch { }
+            }
+
+            return result;
         }
 
         async Task<string> InstallWslAsync()
         {
             UpdateStep(0, "active", T(
-                "未检测到 WSL 发行版，正在请求管理员权限安装 WSL（Ubuntu）…",
-                "未偵測到 WSL 發行版，正在要求系統管理員權限以安裝 WSL（Ubuntu）…",
+                "未检测到 WSL 发行版，正在请求管理员权限静默安装 WSL（Ubuntu）…",
+                "未偵測到 WSL 發行版，正在要求系統管理員權限以背景安裝 WSL（Ubuntu）…",
                 "No WSL distribution found. Requesting administrator permission to install WSL (Ubuntu)…"));
-            Log("starting elevated wsl --install -d Ubuntu --no-launch");
+            Log("starting hidden elevated wsl --install -d Ubuntu --no-launch");
 
-            string result = await RunElevatedWslInstallAsync("--install -d Ubuntu --no-launch");
+            await RunElevatedWslInstallAsync("--install -d Ubuntu --no-launch");
             if (exiting) return null;
-
-            if (result != "ok" && await Task.Run(delegate { return DetectDistro(); }) == null)
-            {
-                Log("retrying elevated wsl --install -d Ubuntu without --no-launch");
-                await RunElevatedWslInstallAsync("--install -d Ubuntu");
-                if (exiting) return null;
-            }
 
             string distro = await Task.Run(delegate { return DetectDistro(); });
             if (distro != null)
